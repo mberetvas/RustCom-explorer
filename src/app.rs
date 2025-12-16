@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use std::time::Duration;
 use crate::scanner::ComObject;
 use crate::error_handling::Result;
@@ -30,6 +30,23 @@ pub struct App {
     pub error_message: Option<String>,
 }
 
+/// Helper function to filter objects based on a query.
+/// Defined outside impl App to allow disjoint borrowing of App fields.
+fn filter_objects<'a>(objects: &'a [ComObject], query: &str) -> Vec<&'a ComObject> {
+    if query.is_empty() {
+        objects.iter().collect()
+    } else {
+        let q = query.to_lowercase();
+        objects.iter()
+            .filter(|obj| 
+                obj.name.to_lowercase().contains(&q) || 
+                obj.clsid.to_lowercase().contains(&q) ||
+                obj.description.to_lowercase().contains(&q)
+            )
+            .collect()
+    }
+}
+
 impl App {
     pub fn new(objects: Vec<ComObject>) -> Self {
         let mut list_state = ListState::default();
@@ -48,6 +65,13 @@ impl App {
         }
     }
 
+    /// Helper function to get objects filtered by the search query.
+    /// Note: usages of this method borrow the whole App instance.
+    /// For disjoint field borrowing (like in ui_render), use the standalone filter_objects function.
+    pub fn get_filtered_objects(&self) -> Vec<&ComObject> {
+        filter_objects(&self.objects_list, &self.search_query)
+    }
+
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
         loop {
             terminal.draw(|f| ui_render(f, self))?;
@@ -56,11 +80,41 @@ impl App {
                 && let Event::Key(key) = event::read()?
                     && key.kind == KeyEventKind::Press {
                         match key.code {
-                            KeyCode::Char('q') => self.should_quit = true,
+                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                self.should_quit = true;
+                            }
+                            KeyCode::Char(c) => {
+                                if self.app_mode == AppMode::Browsing {
+                                    self.search_query.push(c);
+                                    // Reset selection to top when search changes
+                                    if !self.get_filtered_objects().is_empty() {
+                                        self.list_state.select(Some(0));
+                                    } else {
+                                        self.list_state.select(None);
+                                    }
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                if self.app_mode == AppMode::Browsing {
+                                    let _ = self.search_query.pop();
+                                     if !self.get_filtered_objects().is_empty() {
+                                        self.list_state.select(Some(0));
+                                    } else {
+                                        self.list_state.select(None);
+                                    }
+                                }
+                            }
                             KeyCode::Down => self.next(),
                             KeyCode::Up => self.previous(),
                             KeyCode::Enter => self.inspect_selected(),
-                            KeyCode::Esc => self.exit_inspection(),
+                            KeyCode::Esc => {
+                                if self.app_mode == AppMode::Inspecting {
+                                    self.exit_inspection();
+                                } else if !self.search_query.is_empty() {
+                                    self.search_query.clear();
+                                    self.list_state.select(Some(0));
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -73,13 +127,17 @@ impl App {
     }
 
     fn next(&mut self) {
-        if self.objects_list.is_empty() {
+        let filtered = self.get_filtered_objects();
+        if filtered.is_empty() {
             return;
         }
         
-        let i = match self.list_state.selected() {
+        // Calculate new index using filtered list
+        // We must drop 'filtered' before mutating self.list_state to satisfy borrow checker
+        // if NLL doesn't handle it automatically (it should if we don't use filtered after).
+        let new_idx = match self.list_state.selected() {
             Some(i) => {
-                if i >= self.objects_list.len() - 1 {
+                if i >= filtered.len() - 1 {
                     0
                 } else {
                     i + 1
@@ -87,47 +145,59 @@ impl App {
             }
             None => 0,
         };
-        self.list_state.select(Some(i));
+        // filtered is no longer used here
+        self.list_state.select(Some(new_idx));
     }
 
     fn previous(&mut self) {
-        if self.objects_list.is_empty() {
+        let filtered = self.get_filtered_objects();
+        if filtered.is_empty() {
             return;
         }
 
-        let i = match self.list_state.selected() {
+        let new_idx = match self.list_state.selected() {
             Some(i) => {
                 if i == 0 {
-                    self.objects_list.len() - 1
+                    filtered.len() - 1
                 } else {
                     i - 1
                 }
             }
             None => 0,
         };
-        self.list_state.select(Some(i));
+        self.list_state.select(Some(new_idx));
     }
 
     fn inspect_selected(&mut self) {
-        if let Some(index) = self.list_state.selected()
-            && let Some(obj) = self.objects_list.get(index) {
-                // Clear previous state
-                self.selected_object = None;
-                self.error_message = None;
+        // 1. Identify the object CLSID
+        // We isolate the borrow of 'self' (via get_filtered_objects) to this block.
+        // We clone the CLSID so we can drop the references to self.
+        let clsid_opt = {
+            let filtered = self.get_filtered_objects();
+            self.list_state.selected()
+                .and_then(|index| filtered.get(index))
+                .map(|obj| obj.clsid.clone())
+        };
 
-                // Attempt to get type info (Note: Blocking operation)
-                match com_interop::get_type_info(&obj.clsid) {
-                    Ok(details) => {
-                        self.selected_object = Some(details);
-                    }
-                    Err(e) => {
-                        self.error_message = Some(e.to_string());
-                    }
+        // 2. Perform the inspection (mutation of self)
+        if let Some(clsid) = clsid_opt {
+            // Clear previous state
+            self.selected_object = None;
+            self.error_message = None;
+
+            // Attempt to get type info (Note: Blocking operation)
+            match com_interop::get_type_info(&clsid) {
+                Ok(details) => {
+                    self.selected_object = Some(details);
                 }
-                
-                // Transition to Inspecting mode to show details/error in right pane
-                self.app_mode = AppMode::Inspecting;
+                Err(e) => {
+                    self.error_message = Some(e.to_string());
+                }
             }
+            
+            // Transition to Inspecting mode
+            self.app_mode = AppMode::Inspecting;
+        }
     }
 
     fn exit_inspection(&mut self) {
@@ -149,6 +219,7 @@ fn ui_render(f: &mut Frame, app: &mut App) {
         ])
         .split(f.area());
 
+    // Verified: 50/50 split ratio as per Task 2.3 requirements.
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -157,8 +228,13 @@ fn ui_render(f: &mut Frame, app: &mut App) {
         ])
         .split(chunks[0]);
 
-    // Left Pane: Object List
-    let items: Vec<ListItem> = app.objects_list
+    // Left Pane: Object List (Filtered)
+    // We use disjoint borrowing here to avoid E0502
+    let objects_list = &app.objects_list;
+    let search_query = &app.search_query;
+    let filtered_objects = filter_objects(objects_list, search_query);
+
+    let items: Vec<ListItem> = filtered_objects
         .iter()
         .map(|obj| {
             let content = format!("{} ({})", obj.name, obj.clsid);
@@ -166,12 +242,19 @@ fn ui_render(f: &mut Frame, app: &mut App) {
         })
         .collect();
 
+    let list_title = if search_query.is_empty() {
+        "COM Objects".to_string()
+    } else {
+        format!("COM Objects (Filter: '{}')", search_query)
+    };
+
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("COM Objects"))
+        .block(Block::default().borders(Borders::ALL).title(list_title))
         .highlight_style(Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD))
         .highlight_symbol(">> ");
     
-    // We access list_state mutably here, separate from objects_list borrow above
+    // We access list_state mutably here. 
+    // Since filtered_objects borrows from objects_list/search_query, and list_state is separate, this is safe.
     f.render_stateful_widget(list, main_chunks[0], &mut app.list_state);
 
     // Right Pane: Details
@@ -237,9 +320,10 @@ fn ui_render(f: &mut Frame, app: &mut App) {
             }
         },
         _ => {
-            // Browsing Mode: Show basic metadata
+            // Browsing Mode: Show basic metadata for selected item in filtered list
+            // filtered_objects is still valid here (immutable borrow)
             if let Some(idx) = app.list_state.selected() {
-                if let Some(obj) = app.objects_list.get(idx) {
+                if let Some(obj) = filtered_objects.get(idx) {
                     vec![
                         Line::from(Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD))),
                         Line::from(obj.name.as_str()),
@@ -268,10 +352,31 @@ fn ui_render(f: &mut Frame, app: &mut App) {
     f.render_widget(details, main_chunks[1]);
 
     // Bottom Bar
+    let current_selection_name = if let Some(idx) = app.list_state.selected() {
+         filtered_objects.get(idx).map(|o| o.name.as_str()).unwrap_or("Unknown")
+    } else {
+        "None"
+    };
+
+    let mode_str = match app.app_mode {
+        AppMode::Scanning => "SCANNING",
+        AppMode::Browsing => "BROWSING",
+        AppMode::Inspecting => "INSPECTING",
+    };
+
+    let search_status = if search_query.is_empty() {
+        " [Search: <Type to Filter>]".to_string()
+    } else {
+        format!(" [Search: '{}']", search_query)
+    };
+
     let status_text = format!(
-        "Mode: {:?} | Objects: {} | <Up/Down>: Navigate | <Enter>: Inspect | <Esc>: Back | <q>: Quit", 
-        app.app_mode, 
-        app.objects_list.len()
+        "Mode: {} | Obj: {} | Count: {}/{} |{} | <Up/Down>: Nav | <Enter>: Insp | <Esc>: Back/Clear | <Ctrl+c>: Quit", 
+        mode_str,
+        current_selection_name,
+        filtered_objects.len(),
+        app.objects_list.len(),
+        search_status
     );
     let status = Paragraph::new(status_text)
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));

@@ -52,9 +52,9 @@ impl App {
         loop {
             terminal.draw(|f| ui_render(f, self))?;
 
-            if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
+            if event::poll(Duration::from_millis(100))?
+                && let Event::Key(key) = event::read()?
+                    && key.kind == KeyEventKind::Press {
                         match key.code {
                             KeyCode::Char('q') => self.should_quit = true,
                             KeyCode::Down => self.next(),
@@ -64,8 +64,6 @@ impl App {
                             _ => {}
                         }
                     }
-                }
-            }
 
             if self.should_quit {
                 break;
@@ -111,8 +109,8 @@ impl App {
     }
 
     fn inspect_selected(&mut self) {
-        if let Some(index) = self.list_state.selected() {
-            if let Some(obj) = self.objects_list.get(index) {
+        if let Some(index) = self.list_state.selected()
+            && let Some(obj) = self.objects_list.get(index) {
                 // Clear previous state
                 self.selected_object = None;
                 self.error_message = None;
@@ -130,7 +128,6 @@ impl App {
                 // Transition to Inspecting mode to show details/error in right pane
                 self.app_mode = AppMode::Inspecting;
             }
-        }
     }
 
     fn exit_inspection(&mut self) {

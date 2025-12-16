@@ -170,10 +170,6 @@ comm_browser/
 │   ├── scanner.rs           # Registry scanning
 │   ├── com_interop.rs       # COM initialization & type parsing
 │   └── error_handling.rs    # Error types
-├── Docs/
-│   ├── prd.md               # Product requirements
-│   ├── tasks_and_lists.md   # Development roadmap
-│   └── crates_and_setup.md  # Dependency guide
 ├── Cargo.toml               # Project manifest
 └── README.md                # This file
 ```

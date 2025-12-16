@@ -1,8 +1,7 @@
 use crate::error_handling::{Result, Error};
 use serde::{Serialize, Deserialize};
-use std::ffi::c_void;
 use windows::{
-    core::{GUID, Interface, BSTR, PCWSTR},
+    core::{GUID, BSTR, PCWSTR},
     Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, IIDFromString,
         CLSCTX_ALL, COINIT_MULTITHREADED,
@@ -32,7 +31,7 @@ impl Drop for ComGuard {
 /// Initializes the COM library.
 pub fn initialize_com() -> Result<ComGuard> {
     unsafe {
-        CoInitializeEx(None, COINIT_MULTITHREADED).ok();
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED).ok();
     }
     Ok(ComGuard)
 }
@@ -87,7 +86,7 @@ fn guid_from_str(s: &str) -> Result<GUID> {
     
     unsafe {
         IIDFromString(PCWSTR::from_raw(wide.as_ptr()))
-            .map_err(|e| Error::from(e))
+            .map_err(Error::from)
     }
 }
 
@@ -107,7 +106,7 @@ fn load_type_info_from_registry(clsid_str: &str) -> Result<ITypeInfo> {
         let type_lib: ITypeLib = LoadRegTypeLib(&typelib_guid, major, minor, 0)?;
         type_lib.GetTypeInfoOfGuid(&guid_from_str(clsid_str).unwrap_or_default())
             .or_else(|_| type_lib.GetTypeInfo(0))
-    }.map_err(|e| Error::from(e))
+    }.map_err(Error::from)
 }
 
 fn parse_version(ver: &str) -> Option<(u16, u16)> {
@@ -190,12 +189,10 @@ fn parse_type_info(type_info: &ITypeInfo, default_name: &str) -> Result<TypeDeta
                         let access = if desc.invkind == INVOKE_PROPERTYGET { AccessMode::Read } else { AccessMode::Write };
                         let prop_type = if desc.invkind == INVOKE_PROPERTYGET {
                             return_type
+                        } else if !args.is_empty() {
+                            args.last().unwrap().split(": ").nth(1).unwrap_or("Variant").to_string()
                         } else {
-                            if !args.is_empty() {
-                                args.last().unwrap().split(": ").nth(1).unwrap_or("Variant").to_string()
-                            } else {
-                                "Variant".to_string()
-                            }
+                            "Variant".to_string()
                         };
 
                         members.push(Member::Property {
@@ -285,7 +282,7 @@ pub fn vartype_to_string(vt: u16) -> String {
 
     let mut result = type_name.to_string();
     if is_array { result.push_str("[]"); }
-    if is_byref { result.push_str("&"); }
+    if is_byref { result.push('&'); }
     result
 }
 

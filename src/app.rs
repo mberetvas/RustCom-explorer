@@ -1,3 +1,4 @@
+// src/app.rs
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout},
@@ -9,8 +10,12 @@ use ratatui::{
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use std::time::Duration;
 use crate::scanner::ComObject;
-use crate::error_handling::Result;
+use crate::error_handling::{Result, Context};
 use crate::com_interop::{self, TypeDetails, Member, AccessMode};
+use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
@@ -28,23 +33,40 @@ pub struct App {
     // New fields for state management
     pub selected_object: Option<TypeDetails>,
     pub error_message: Option<String>,
+    pub inspection_receiver: Option<Receiver<Result<TypeDetails>>>,
 }
 
 /// Helper function to filter objects based on a query.
 /// Defined outside impl App to allow disjoint borrowing of App fields.
 fn filter_objects<'a>(objects: &'a [ComObject], query: &str) -> Vec<&'a ComObject> {
     if query.is_empty() {
-        objects.iter().collect()
-    } else {
-        let q = query.to_lowercase();
-        objects.iter()
-            .filter(|obj| 
-                obj.name.to_lowercase().contains(&q) || 
-                obj.clsid.to_lowercase().contains(&q) ||
-                obj.description.to_lowercase().contains(&q)
-            )
-            .collect()
+        return objects.iter().collect();
     }
+
+    let matcher = SkimMatcherV2::default();
+
+    let mut scored: Vec<(i64, &'a ComObject)> = objects.iter()
+        .filter_map(|obj| {
+            // Score match against Name, CLSID, and Description.
+            // Prefer matches in Name (+10) and CLSID (+5) over Description to improve relevance.
+            let s_name = matcher.fuzzy_match(&obj.name, query).map(|s| s + 10);
+            let s_clsid = matcher.fuzzy_match(&obj.clsid, query).map(|s| s + 5);
+            let s_desc = matcher.fuzzy_match(&obj.description, query);
+
+            // Take the best match among the fields
+            let max_score = [s_name, s_clsid, s_desc]
+                .iter()
+                .filter_map(|&s| s)
+                .max();
+
+            max_score.map(|score| (score, obj))
+        })
+        .collect();
+
+    // Sort results by score descending (highest relevance first)
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+
+    scored.into_iter().map(|(_, obj)| obj).collect()
 }
 
 impl App {
@@ -62,6 +84,7 @@ impl App {
             should_quit: false,
             selected_object: None,
             error_message: None,
+            inspection_receiver: None,
         }
     }
 
@@ -74,6 +97,30 @@ impl App {
 
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
         loop {
+            // Check for background task completion
+            if let Some(rx) = &self.inspection_receiver {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        match result {
+                            Ok(details) => self.selected_object = Some(details),
+                            Err(e) => {
+                                // Provide detailed diagnostics
+                                self.error_message = Some(format!("Error: {:#}", e));
+                            }
+                        }
+                        // Task completed, clear receiver
+                        self.inspection_receiver = None;
+                    },
+                    Err(TryRecvError::Empty) => {
+                        // Still loading, do nothing
+                    },
+                    Err(TryRecvError::Disconnected) => {
+                        self.error_message = Some("Inspection background task failed unexpectedly.".to_string());
+                        self.inspection_receiver = None;
+                    }
+                }
+            }
+
             terminal.draw(|f| ui_render(f, self))?;
 
             if event::poll(Duration::from_millis(100))?
@@ -132,9 +179,6 @@ impl App {
             return;
         }
         
-        // Calculate new index using filtered list
-        // We must drop 'filtered' before mutating self.list_state to satisfy borrow checker
-        // if NLL doesn't handle it automatically (it should if we don't use filtered after).
         let new_idx = match self.list_state.selected() {
             Some(i) => {
                 if i >= filtered.len() - 1 {
@@ -145,7 +189,6 @@ impl App {
             }
             None => 0,
         };
-        // filtered is no longer used here
         self.list_state.select(Some(new_idx));
     }
 
@@ -170,8 +213,6 @@ impl App {
 
     fn inspect_selected(&mut self) {
         // 1. Identify the object CLSID
-        // We isolate the borrow of 'self' (via get_filtered_objects) to this block.
-        // We clone the CLSID so we can drop the references to self.
         let clsid_opt = {
             let filtered = self.get_filtered_objects();
             self.list_state.selected()
@@ -179,24 +220,41 @@ impl App {
                 .map(|obj| obj.clsid.clone())
         };
 
-        // 2. Perform the inspection (mutation of self)
+        // 2. Perform the inspection (background thread)
         if let Some(clsid) = clsid_opt {
             // Clear previous state
             self.selected_object = None;
             self.error_message = None;
-
-            // Attempt to get type info (Note: Blocking operation)
-            match com_interop::get_type_info(&clsid) {
-                Ok(details) => {
-                    self.selected_object = Some(details);
-                }
-                Err(e) => {
-                    self.error_message = Some(e.to_string());
-                }
-            }
             
-            // Transition to Inspecting mode
+            // Cancel any pending inspection
+            self.inspection_receiver = None;
+            
+            // Transition to Inspecting mode (UI will show Loading...)
             self.app_mode = AppMode::Inspecting;
+
+            let (tx, rx) = mpsc::channel();
+            self.inspection_receiver = Some(rx);
+
+            let clsid_clone = clsid.clone();
+            
+            thread::spawn(move || {
+                // Initialize COM in the worker thread
+                // We use matching here to guard against init failures, though current impl is safe
+                let _com_guard = match com_interop::initialize_com() {
+                    Ok(guard) => guard,
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
+                        return;
+                    }
+                };
+
+                // Perform the blocking operation
+                // Add context to error for better diagnostics
+                let result = com_interop::get_type_info(&clsid_clone)
+                    .context(format!("Failed to inspect COM object with CLSID {}", clsid_clone));
+                
+                let _ = tx.send(result);
+            });
         }
     }
 
@@ -206,6 +264,7 @@ impl App {
             self.app_mode = AppMode::Browsing;
             self.selected_object = None;
             self.error_message = None;
+            self.inspection_receiver = None; // Cancel monitoring
         }
     }
 }

@@ -1,0 +1,25 @@
+[package]
+name = "comm_browser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+arboard = "3.6.1"
+crossterm = "0.29.0"
+fuzzy-matcher = "0.3.7"
+ratatui = "0.29.0"
+winreg = "0.55.0"
+
+
+# --- Windows & COM Interaction ---
+# Microsoft's official Rust projection for Windows APIs
+[dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_System_Com",         # CoCreateInstance, CoInitialize
+    "Win32_System_Ole",         # IDispatch, ITypeInfo
+    "Win32_System_Registry",    # HKEY handling
+    "Win32_Foundation",         # Basic types (BSTR, HRESULT, BOOL)
+    "Win32_System_Variant",     # Variant types for COM
+]

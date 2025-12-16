@@ -48,9 +48,9 @@ impl App {
             // We split the borrow here implicitly by passing fields.
             terminal.draw(|f| ui_render(f, &self.objects_list, &self.app_mode, &mut self.list_state))?;
 
-            if event::poll(Duration::from_millis(100))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
+            if event::poll(Duration::from_millis(100))?
+                && let Event::Key(key) = event::read()?
+                    && key.kind == KeyEventKind::Press {
                         match key.code {
                             KeyCode::Char('q') => self.should_quit = true,
                             KeyCode::Down => self.next(),
@@ -58,8 +58,6 @@ impl App {
                             _ => {}
                         }
                     }
-                }
-            }
 
             if self.should_quit {
                 break;

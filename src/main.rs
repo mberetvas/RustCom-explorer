@@ -1,6 +1,12 @@
-use comm_browser::scanner; 
+use comm_browser::{scanner, com_interop};
+use comm_browser::error_handling::Result;
 
-fn main() {
+fn main() -> Result<()> {
+    // Initialize COM Library (Multithreaded)
+    // The _com_guard will automatically call CoUninitialize when main exits.
+    let _com_guard = com_interop::initialize_com()?;
+    
+    println!("COM initialized successfully.");
     println!("Scanning for COM objects...");
     
     match scanner::scan_com_objects() {
@@ -19,4 +25,6 @@ fn main() {
         },
         Err(e) => eprintln!("Error scanning registry: {:?}", e),
     }
+
+    Ok(())
 }

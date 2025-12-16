@@ -9,13 +9,14 @@ arboard = "3.6.1"
 crossterm = "0.29.0"
 fuzzy-matcher = "0.3.7"
 ratatui = "0.29.0"
+serde = {version = "1.0.228", features = ["derive"]}
 winreg = "0.55.0"
 
 
 # --- Windows & COM Interaction ---
 # Microsoft's official Rust projection for Windows APIs
 [dependencies.windows]
-version = "0.58"
+version = "0.62.2"
 features = [
     "Win32_System_Com",         # CoCreateInstance, CoInitialize
     "Win32_System_Ole",         # IDispatch, ITypeInfo

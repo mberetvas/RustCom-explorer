@@ -1,5 +1,7 @@
 # RustCOM Explorer
 
+![RustCOM Explorer](rs-com-explorer.png)
+
 > **A generic, lightning-fast TUI for exploring Windows COM/ActiveX objects.**
 
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)

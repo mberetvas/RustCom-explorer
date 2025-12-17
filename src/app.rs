@@ -2,11 +2,11 @@
 use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Clear},
     Frame, Terminal,
 };
+use crate::theme::*;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use std::time::{Duration, Instant};
 use crate::scanner::ComObject;
@@ -439,13 +439,17 @@ impl App {
 }
 
 fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
+    // Set background for the whole terminal area to ensure black everywhere
+    let size = f.area();
+    f.render_widget(Block::default().style(STYLE_BASE), size);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),
             Constraint::Length(1),
         ])
-        .split(f.area());
+        .split(size);
 
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -455,14 +459,14 @@ fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
         ])
         .split(chunks[0]);
 
-    // Left Pane: Object List (Tree View)
+    // --- LEFT PANE: Object List ---
     let list_items: Vec<ListItem> = view_items.iter().map(|item| {
         match item {
             TreeItem::Category { name, count, expanded } => {
                 let icon = if *expanded { "▼" } else { "▶" };
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("{} {} ", icon, name), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("({})", count), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{} {} ", icon, name), STYLE_CATEGORY_TITLE),
+                    Span::styled(format!("({})", count), STYLE_CATEGORY_COUNT),
                 ]))
             },
             TreeItem::Object(idx) => {
@@ -470,7 +474,7 @@ fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
                     ListItem::new(Line::from(vec![
                         Span::raw("  "), // Indentation
                         Span::raw(&obj.name),
-                        Span::styled(format!(" ({})", obj.clsid), Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("  {}", obj.clsid), STYLE_OBJECT_CLSID),
                     ]))
                 } else {
                     ListItem::new("Invalid Object")
@@ -480,73 +484,68 @@ fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
     }).collect();
 
     let list_title = if app.search_query.is_empty() {
-        "COM Objects".to_string()
+        " COM OBJECTS ".to_string()
     } else {
-        format!("COM Objects (Filter: '{}')", app.search_query)
+        format!(" FILTER: {} ", app.search_query.to_uppercase())
     };
 
     let list = List::new(list_items)
-        .block(Block::default().borders(Borders::ALL).title(list_title))
-        .highlight_style(Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD))
-        .highlight_symbol(" "); 
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_style(STYLE_BORDER)
+            .title(Span::styled(list_title, STYLE_CATEGORY_TITLE)))
+        .style(STYLE_BASE)
+        .highlight_style(STYLE_LIST_HIGHLIGHT)
+        .highlight_symbol("> "); 
     
     f.render_stateful_widget(list, main_chunks[0], &mut app.list_state);
 
-    // Right Pane: Details or Inspection
+    // --- RIGHT PANE: Details ---
     let right_pane_area = main_chunks[1];
-    
+    let details_block_style = Block::default()
+        .borders(Borders::ALL)
+        .border_style(STYLE_BORDER)
+        .style(STYLE_BASE);
+
     match app.app_mode {
         AppMode::Inspecting => {
             if let Some(err_msg) = &app.error_message {
                 let p = Paragraph::new(vec![
-                    Line::from(Span::styled("Error Inspecting Object:", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))),
-                    Line::from(Span::styled(err_msg, Style::default().fg(Color::Red))),
+                    Line::from(Span::styled("ERROR", STYLE_ERROR_TITLE)),
+                    Line::from(Span::raw(err_msg)),
                 ])
-                .block(Block::default().borders(Borders::ALL).title("Error"))
+                .block(details_block_style.clone().title(" SYSTEM MESSAGE "))
                 .wrap(ratatui::widgets::Wrap { trim: true });
                 
                 f.render_widget(p, right_pane_area);
             } else if let Some(details) = &app.selected_object {
-                // Split right pane into Metadata and Members
                 let right_chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(8), // Fixed height for metadata
-                        Constraint::Min(0),    // Remaining for members
-                    ])
+                    .constraints([Constraint::Length(8), Constraint::Min(0)])
                     .split(right_pane_area);
 
-                // 1. Metadata Block
+                // Metadata
                 let meta_text = vec![
-                    Line::from(vec![Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD)), Span::raw(&details.name)]),
-                    Line::from(vec![Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD)), Span::raw(&details.description)]),
+                    Line::from(vec![Span::styled("NAME: ", STYLE_METADATA_LABEL), Span::raw(&details.name)]),
+                    Line::from(vec![Span::styled("DESC: ", STYLE_METADATA_LABEL), Span::raw(&details.description)]),
                     Line::from(""),
-                    Line::from(Span::styled("Copy: 'c' (Item) | 'Shift+C' (All)", Style::default().fg(Color::DarkGray))),
+                    Line::from(Span::styled("COMMANDS: 'c' (Copy) | 'Shift+C' (Copy All)", STYLE_HINT_TEXT)),
                 ];
                 
-                let meta_block = Paragraph::new(meta_text)
-                    .block(Block::default().borders(Borders::ALL).title("Object Details"))
-                    .wrap(ratatui::widgets::Wrap { trim: true });
-                f.render_widget(meta_block, right_chunks[0]);
+                f.render_widget(Paragraph::new(meta_text).block(details_block_style.clone().title(" METADATA ")), right_chunks[0]);
 
-                // 2. Members List Block
+                // Members List
                 let members_list: Vec<ListItem> = details.members.iter().map(|m| {
                     match m {
                         Member::Method { name, signature, .. } => {
                             ListItem::new(Line::from(vec![
-                                Span::styled("M ", Style::default().fg(Color::Cyan)), 
+                                Span::styled("ƒ ", STYLE_METHOD_MARKER), 
                                 Span::raw(format!("{}{}", name, signature))
                             ]))
                         },
-                        Member::Property { name, value_type, access } => {
-                            let access_badge = match access {
-                                AccessMode::Read => "R",
-                                AccessMode::Write => "W",
-                                AccessMode::ReadWrite => "RW",
-                            };
+                        Member::Property { name, value_type, .. } => {
                             ListItem::new(Line::from(vec![
-                                Span::styled("P ", Style::default().fg(Color::Green)),
-                                Span::styled(format!("[{}] ", access_badge), Style::default().fg(Color::DarkGray)),
+                                Span::styled("prop ", STYLE_PROPERTY_MARKER),
                                 Span::raw(format!("{}: {}", name, value_type))
                             ]))
                         }
@@ -554,102 +553,64 @@ fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
                 }).collect();
 
                 let members_block = List::new(members_list)
-                    .block(Block::default().borders(Borders::ALL).title("Members")
-                    .style(Style::default().fg(Color::Yellow)))
-                    .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+                    .block(Block::default().borders(Borders::ALL).border_style(STYLE_BORDER).title(" MEMBERS "))
+                    .style(STYLE_BASE)
+                    .highlight_style(STYLE_LIST_HIGHLIGHT)
                     .highlight_symbol("> ");
                 
                 f.render_stateful_widget(members_block, right_chunks[1], &mut app.member_list_state);
 
             } else {
-                let p = Paragraph::new("Loading...").block(Block::default().borders(Borders::ALL).title("Details"));
-                f.render_widget(p, right_pane_area);
+                f.render_widget(Paragraph::new("INITIALIZING...").block(details_block_style.clone().title(" STATUS ")), right_pane_area);
             }
         },
         _ => {
             // Browsing Mode Details
-            let right_pane_block = Block::default()
-                .borders(Borders::ALL)
-                .title("Details");
-
             let details_text = if let Some(idx) = app.list_state.selected() {
                 if let Some(item) = view_items.get(idx) {
                     match item {
                         TreeItem::Category { name, count, .. } => vec![
-                            Line::from(Span::styled("Category: ", Style::default().add_modifier(Modifier::BOLD))),
-                            Line::from(name.as_str()),
+                            Line::from(Span::styled(format!("CATEGORY: {}", name.to_uppercase()), STYLE_METADATA_LABEL)),
                             Line::from(""),
-                            Line::from(format!("Contains {} objects", count)),
-                            Line::from(""),
-                            Line::from(Span::styled("Hint: Press <Enter> to expand/collapse.", Style::default().fg(Color::Gray))),
+                            Line::from(format!("OBJECTS: {}", count)),
                         ],
                         TreeItem::Object(idx) => {
                              if let Some(obj) = app.objects_list.get(*idx) {
                                 vec![
-                                    Line::from(Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD))),
+                                    Line::from(Span::styled("PROGID: ", STYLE_METADATA_LABEL)),
                                     Line::from(obj.name.as_str()),
                                     Line::from(""),
-                                    Line::from(Span::styled("CLSID: ", Style::default().add_modifier(Modifier::BOLD))),
+                                    Line::from(Span::styled("CLSID: ", STYLE_METADATA_LABEL)),
                                     Line::from(obj.clsid.as_str()),
                                     Line::from(""),
-                                    Line::from(Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD))),
+                                    Line::from(Span::styled("DESCRIPTION: ", STYLE_METADATA_LABEL)),
                                     Line::from(obj.description.as_str()),
-                                    Line::from(""),
-                                    Line::from(Span::styled("Hint: Press <Enter> to inspect details.", Style::default().fg(Color::Gray))),
                                 ]
-                             } else {
-                                 vec![Line::from("Unknown Object")]
-                             }
+                             } else { vec![Line::from("UNKNOWN")] }
                         }
                     }
-                } else {
-                    vec![Line::from("Selected index out of bounds")]
-                }
-            } else {
-                vec![Line::from("No object selected")]
-            };
+                } else { vec![] }
+            } else { vec![] };
 
             let details = Paragraph::new(details_text)
-                .block(right_pane_block)
+                .block(details_block_style.clone().title(" DETAILS "))
                 .wrap(ratatui::widgets::Wrap { trim: true });
             
             f.render_widget(details, right_pane_area);
         }
     };
 
-    // Bottom Bar
-    let current_selection_name = if let Some(idx) = app.list_state.selected() {
-         match view_items.get(idx) {
-             Some(TreeItem::Category { name, .. }) => format!("Category: {}", name),
-             Some(TreeItem::Object(idx)) => {
-                 app.objects_list.get(*idx).map(|o| o.name.clone()).unwrap_or("Unknown".to_string())
-             },
-             None => "Unknown".to_string(),
-         }
-    } else {
-        "None".to_string()
-    };
-
+    // --- BOTTOM BAR ---
     let mode_str = match app.app_mode {
-        AppMode::Scanning => "SCANNING",
-        AppMode::Browsing => "BROWSING",
-        AppMode::Inspecting => "INSPECTING",
+        AppMode::Scanning => "SCAN",
+        AppMode::Browsing => "BROWSE",
+        AppMode::Inspecting => "INSPECT",
     };
 
-    let search_status = if app.search_query.is_empty() {
-        "".to_string()
-    } else {
-        format!(" | Search: '{}'", app.search_query)
-    };
-
-    let status_text = format!(
-        "Mode: {} | Obj: {} {} | <Enter>: Expand/Insp | <Esc>: Back | <c/C>: Copy", 
-        mode_str,
-        current_selection_name,
-        search_status
-    );
+    let status_text = format!(" {} | ESC: BACK | ENTER: SELECT | C: COPY ", mode_str);
     let status = Paragraph::new(status_text)
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+        .style(STYLE_STATUS_BAR);
+    
     f.render_widget(status, chunks[1]);
 
     // Render Notification Modal Overlay
@@ -658,15 +619,16 @@ fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
         
         let block = Block::default()
             .borders(Borders::ALL)
-            .title("Notification")
-            .style(Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD));
+            .border_style(STYLE_BORDER)
+            .title(" NOTIFICATION ")
+            .style(STYLE_NOTIFICATION_BG);
             
         let paragraph = Paragraph::new(notification.message.as_str())
             .block(block)
             .wrap(ratatui::widgets::Wrap { trim: true })
             .alignment(ratatui::layout::Alignment::Center);
             
-        f.render_widget(Clear, area); // Clear area behind popup
+        f.render_widget(Clear, area);
         f.render_widget(paragraph, area);
     }
 }

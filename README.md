@@ -31,13 +31,21 @@ Unlike heavy GUI tools like OLEView, this tool runs entirely in the terminal, of
 
 ### Installation
 
-Clone the repository and run the project using Cargo:
+**Option 1: Download Pre-built Executable**
+
+Download the latest built executable for Windows from the [Releases](../../releases) section of this repository. Extract and run directly—no build required.
+
+**Option 2: Build from Source**
+
+Clone the repository and build with Cargo:
 
 ```bash
 git clone https://github.com/Volvo/comm_browser.git
 cd comm_browser
-cargo run --release
+cargo build --release
 ```
+
+The compiled executable will be available in `target/release/comm_browser.exe`.
 
 > **Note:** Some COM objects require Administrator privileges to inspect. If you encounter permission errors, try running your terminal as Administrator.
 
@@ -45,13 +53,17 @@ cargo run --release
 
 The application interface is divided into two panes: the **Object List** (left) and **Details/Inspection** (right).
 
+### Navigation & Browsing
+
+COM objects are organized by category based on their ProgID prefix (e.g., "Excel", "Word", "MSXML"). Use arrow keys to browse categories and individual objects.
+
 ### Keyboard Shortcuts
 
 | Key | Action |
 | :--- | :--- |
 | **Navigation** | |
-| `↑` / `↓` | Scroll through the object list or members list |
-| `Enter` | **Inspect** the selected COM object |
+| `↑` / `↓` | Scroll through categories, objects, or members list |
+| `Enter` | **Expand/Collapse** category OR **Inspect** selected object members |
 | `Esc` | Go back to browsing / Clear search query |
 | `Ctrl+C` | Quit the application |
 | **Search** | |
@@ -61,15 +73,25 @@ The application interface is divided into two panes: the **Object List** (left) 
 | `c` | Copy selected member signature to clipboard |
 | `Shift+C` | Copy **all** members of the object to clipboard |
 
-### Icons & Legend
+### View Structure
 
-When inspecting an object, members are color-coded:
+**Left Pane (Object List):**
+- **Categories** (▼ expanded / ▶ collapsed): Grouped by ProgID prefix
+- **Objects**: Indented under their category, showing Name and CLSID
 
-- 🟦 **M** : **Method** (Function calls)
-- 🟩 **P** : **Property** (Attributes)
-    - `[R]`: Read-only
-    - `[W]`: Write-only
-    - `[RW]`: Read/Write
+**Right Pane (Details):**
+- **Browsing Mode**: Shows metadata about the selected category or object
+- **Inspection Mode**: Displays object metadata and a list of members (methods & properties)
+
+### Member Types & Access Modes
+
+Members are displayed with type indicators and access badges:
+
+- **M** : **Method** (Function call)
+- **P** : **Property** (Attribute)
+  - `[R]`: Read-only
+  - `[W]`: Write-only
+  - `[RW]`: Read/Write
 
 ## 🏗 Architecture
 
@@ -77,8 +99,9 @@ This project uses a modular architecture to separate UI logic from low-level Win
 
 - **`scanner.rs`**: Handles the enumeration of `HKEY_CLASSES_ROOT` to find registered ProgIDs and CLSIDs.
 - **`com_interop.rs`**: The core unsafe Rust layer. It manages COM initialization (RAII), attempts to load TypeInfos from the registry, and parses cryptic `VARDESC`/`FUNCDESC` structures into human-readable strings.
-- **`app.rs`**: Manages the TUI state, event loop, and multithreaded inspection channel.
-- **`ui`**: Built with [Ratatui](https://github.com/ratatui/ratatui).
+- **`app.rs`**: Manages the TUI state, event loop, and multithreaded inspection channel. Includes rendering logic with native [Ratatui](https://github.com/ratatui/ratatui) styling.
+- **`error_handling.rs`**: Custom error handling and type conversions.
+- **`UI Rendering`**: Built with [Ratatui](https://github.com/ratatui/ratatui) using native color themes and styling (no custom theme module).
 
 ### Safety Strategy
 

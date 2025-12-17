@@ -1,0 +1,108 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  check-version:
+    name: Check Version
+    runs-on: windows-latest
+    outputs:
+      should_build: ${{ steps.version-check.outputs.should_build }}
+      cargo_version: ${{ steps.version-check.outputs.cargo_version }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract Cargo.toml version
+        id: cargo-version
+        shell: pwsh
+        run: |
+          $content = Get-Content Cargo.toml -Raw
+          if ($content -match 'version\s*=\s*"([^"]+)"') {
+            $version = $matches[1]
+            echo "cargo_version=$version" >> $env:GITHUB_OUTPUT
+            Write-Output "Cargo.toml version: $version"
+          }
+
+      - name: Get latest release version
+        id: latest-release
+        shell: pwsh
+        run: |
+          $latestRelease = gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>$null
+          if ($LASTEXITCODE -eq 0 -and $latestRelease) {
+            $latestVersion = $latestRelease -replace '^v', ''
+            echo "latest_version=$latestVersion" >> $env:GITHUB_OUTPUT
+            Write-Output "Latest release version: $latestVersion"
+          } else {
+            echo "latest_version=0.0.0" >> $env:GITHUB_OUTPUT
+            Write-Output "No previous releases found"
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compare versions
+        id: version-check
+        shell: pwsh
+        run: |
+          $cargoVersion = "${{ steps.cargo-version.outputs.cargo_version }}"
+          $latestVersion = "${{ steps.latest-release.outputs.latest_version }}"
+          
+          # Parse versions
+          $cargo = [version]$cargoVersion
+          $latest = [version]$latestVersion
+          
+          Write-Output "Comparing: Cargo=$cargo vs Latest=$latest"
+          
+          if ($cargo -gt $latest) {
+            echo "should_build=true" >> $env:GITHUB_OUTPUT
+            Write-Output "✓ Version check passed: $cargo > $latest"
+          } else {
+            echo "should_build=false" >> $env:GITHUB_OUTPUT
+            Write-Output "✗ Version check failed: $cargo is not greater than $latest"
+          }
+
+  build:
+    name: Build Release
+    runs-on: windows-latest
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build with optimizations
+        run: cargo build --release
+        shell: pwsh
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.check-version.outputs.cargo_version }}
+          files: |
+            target/release/comm_browser.exe
+            target/release/comm_browser.pdb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+  build-skipped:
+    name: Build Skipped
+    runs-on: windows-latest
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'false'
+    
+    steps:
+      - name: Skip message
+        run: echo "Build skipped - Cargo.toml version (${{ needs.check-version.outputs.cargo_version }}) is not greater than the latest release"
+        shell: pwsh

@@ -1,4 +1,5 @@
-use crate::error_handling::{Result, Error};
+// src/com_interop.rs
+use crate::error_handling::{Result, InspectError};
 use serde::{Serialize, Deserialize};
 use windows::{
     core::{GUID, BSTR, PCWSTR},
@@ -72,7 +73,8 @@ pub fn get_type_info(clsid_str: &str) -> Result<TypeDetails> {
     
     // 1. Try Registry Strategy
     if let Ok(type_info) = load_type_info_from_registry(clsid_str) {
-        return parse_type_info(&type_info, clsid_str);
+        return parse_type_info(&type_info, clsid_str)
+            .map_err(|e| InspectError::Parsing(format!("Registry TypeInfo parsing failed: {}", e)).into());
     }
 
     // 2. Fallback: Dynamic Instantiation
@@ -86,7 +88,7 @@ fn guid_from_str(s: &str) -> Result<GUID> {
     
     unsafe {
         IIDFromString(PCWSTR::from_raw(wide.as_ptr()))
-            .map_err(Error::from)
+            .map_err(|e| InspectError::Generic(format!("Invalid GUID string: {}", e)).into())
     }
 }
 
@@ -94,19 +96,29 @@ fn guid_from_str(s: &str) -> Result<GUID> {
 
 fn load_type_info_from_registry(clsid_str: &str) -> Result<ITypeInfo> {
     let hkcr = RegKey::predef(HKEY_CLASSES_ROOT);
-    let clsid_key = hkcr.open_subkey(format!("CLSID\\{}", clsid_str))?;
+    let clsid_key = hkcr.open_subkey(format!("CLSID\\{}", clsid_str))
+        .map_err(|e| InspectError::Registry(format!("CLSID key not found: {}", e)))?;
     
-    let typelib_guid_str: String = clsid_key.open_subkey("TypeLib")?.get_value("")?;
-    let typelib_guid = guid_from_str(&typelib_guid_str).map_err(|_| Error::msg("Invalid TypeLib GUID"))?;
+    let typelib_guid_str: String = clsid_key.open_subkey("TypeLib")
+        .and_then(|k| k.get_value(""))
+        .map_err(|_| InspectError::Registry("TypeLib subkey or value missing".into()))?;
+        
+    let typelib_guid = guid_from_str(&typelib_guid_str)?;
 
-    let version_str: String = clsid_key.open_subkey("Version")?.get_value("")?;
+    let version_str: String = clsid_key.open_subkey("Version")
+        .and_then(|k| k.get_value(""))
+        .unwrap_or_else(|_| "1.0".to_string());
+        
     let (major, minor) = parse_version(&version_str).unwrap_or((1, 0));
 
     unsafe {
-        let type_lib: ITypeLib = LoadRegTypeLib(&typelib_guid, major, minor, 0)?;
+        let type_lib: ITypeLib = LoadRegTypeLib(&typelib_guid, major, minor, 0)
+            .map_err(|e| InspectError::Registry(format!("LoadRegTypeLib failed: {}", e.message())))?;
+            
         type_lib.GetTypeInfoOfGuid(&guid_from_str(clsid_str).unwrap_or_default())
             .or_else(|_| type_lib.GetTypeInfo(0))
-    }.map_err(Error::from)
+            .map_err(|e| InspectError::Registry(format!("GetTypeInfo from TypeLib failed: {}", e.message())).into())
+    }
 }
 
 fn parse_version(ver: &str) -> Option<(u16, u16)> {
@@ -127,9 +139,26 @@ fn parse_version(ver: &str) -> Option<(u16, u16)> {
 
 fn load_type_info_dynamic(clsid: &GUID) -> Result<TypeDetails> {
     unsafe {
-        let unknown: IDispatch = CoCreateInstance(clsid, None, CLSCTX_ALL)?;
-        let type_info = unknown.GetTypeInfo(0, 0)?;
+        let unknown: IDispatch = CoCreateInstance(clsid, None, CLSCTX_ALL)
+            .map_err(|e| {
+                let code = e.code().0;
+                match code {
+                    -2147024891 => InspectError::Permission("Access Denied (E_ACCESSDENIED)".to_string()), // 0x80070005
+                    -2147221230 => InspectError::Permission("License Missing (CLASS_E_NOTLICENSED)".to_string()), // 0x80040112
+                    -2147221164 => InspectError::Registry("Class not registered (REGDB_E_CLASSNOTREG)".to_string()), // 0x80040154
+                    -2147221005 => InspectError::Registry("Invalid Class String (CO_E_CLASSSTRING)".to_string()), // 0x800401F3
+                    _ => InspectError::Instantiation { 
+                        message: e.message().to_string(), 
+                        hresult: Some(code) 
+                    }
+                }
+            })?;
+        
+        let type_info = unknown.GetTypeInfo(0, 0)
+            .map_err(|e| InspectError::Parsing(format!("GetTypeInfo(0) failed: {}", e.message())))?;
+        
         parse_type_info(&type_info, &format!("{:?}", clsid))
+            .map_err(|e| InspectError::Parsing(format!("Dynamic TypeInfo parsing failed: {}", e)).into())
     }
 }
 
@@ -137,7 +166,7 @@ fn load_type_info_dynamic(clsid: &GUID) -> Result<TypeDetails> {
 
 fn parse_type_info(type_info: &ITypeInfo, default_name: &str) -> Result<TypeDetails> {
     let mut members = Vec::new();
-    let attr = ScopedTypeAttr::new(type_info)?;
+    let attr = ScopedTypeAttr::new(type_info).map_err(|e| InspectError::Parsing(e.to_string()))?;
     let (name, doc) = get_documentation(type_info, -1).unwrap_or((default_name.to_string(), String::new()));
 
     unsafe {
@@ -147,13 +176,12 @@ fn parse_type_info(type_info: &ITypeInfo, default_name: &str) -> Result<TypeDeta
                 let desc = *func_desc.0;
                 let (func_name, _) = get_documentation(type_info, desc.memid).unwrap_or(("Unknown".to_string(), String::new()));
                 
-                // GetNames expects a slice `&mut [BSTR]`
                 let mut names = vec![BSTR::new(); 10]; 
                 let mut c_names = 0;
                 
                 let _ = type_info.GetNames(
                     desc.memid, 
-                    &mut names, // Pass slice directly
+                    &mut names, 
                     &mut c_names
                 );
                 
@@ -169,12 +197,10 @@ fn parse_type_info(type_info: &ITypeInfo, default_name: &str) -> Result<TypeDeta
                     };
                     
                     let elem = *params_ptr.add(p);
-                    // Extract .0 from VARENUM
                     let arg_type = vartype_to_string(elem.tdesc.vt.0);
                     args.push(format!("{}: {}", arg_name, arg_type));
                 }
 
-                // Extract .0 from VARENUM
                 let return_type = vartype_to_string(desc.elemdescFunc.tdesc.vt.0);
 
                 match desc.invkind {
@@ -211,7 +237,6 @@ fn parse_type_info(type_info: &ITypeInfo, default_name: &str) -> Result<TypeDeta
             if let Ok(var_desc) = ScopedVarDesc::new(type_info, i as u32) {
                 let desc = *var_desc.0;
                 let (var_name, _) = get_documentation(type_info, desc.memid).unwrap_or(("Unknown".to_string(), String::new()));
-                // Extract .0 from VARENUM
                 let var_type = vartype_to_string(desc.elemdescVar.tdesc.vt.0);
                 
                 members.push(Member::Property {
@@ -234,14 +259,13 @@ fn get_documentation(type_info: &ITypeInfo, memid: i32) -> Result<(String, Strin
     let mut name = BSTR::new();
     let mut doc_string = BSTR::new();
     unsafe {
-        // Pass pointers wrapped in Some, and None for nulls
         type_info.GetDocumentation(
             memid, 
             Some(&mut name as *mut _), 
             Some(&mut doc_string as *mut _), 
-            std::ptr::null_mut(), // pdwHelpContext is just *mut u32, not Option
-            None // pbstrHelpFile is Option
-        )?;
+            std::ptr::null_mut(), 
+            None
+        ).map_err(|e| InspectError::Parsing(format!("GetDocumentation failed: {}", e.message())))?;
     }
     Ok((name.to_string(), doc_string.to_string()))
 }
@@ -292,7 +316,7 @@ struct ScopedTypeAttr<'a>(&'a TYPEATTR, &'a ITypeInfo);
 impl<'a> ScopedTypeAttr<'a> {
     fn new(info: &'a ITypeInfo) -> Result<Self> {
         unsafe {
-            let ptr = info.GetTypeAttr()?;
+            let ptr = info.GetTypeAttr().map_err(|e| InspectError::Parsing(format!("GetTypeAttr failed: {}", e.message())))?;
             Ok(Self(&*ptr, info))
         }
     }
@@ -307,7 +331,7 @@ struct ScopedFuncDesc<'a>(&'a FUNCDESC, &'a ITypeInfo);
 impl<'a> ScopedFuncDesc<'a> {
     fn new(info: &'a ITypeInfo, index: u32) -> Result<Self> {
         unsafe {
-            let ptr = info.GetFuncDesc(index)?;
+            let ptr = info.GetFuncDesc(index).map_err(|e| InspectError::Parsing(format!("GetFuncDesc failed: {}", e.message())))?;
             Ok(Self(&*ptr, info))
         }
     }
@@ -322,7 +346,7 @@ struct ScopedVarDesc<'a>(&'a VARDESC, &'a ITypeInfo);
 impl<'a> ScopedVarDesc<'a> {
     fn new(info: &'a ITypeInfo, index: u32) -> Result<Self> {
         unsafe {
-            let ptr = info.GetVarDesc(index)?;
+            let ptr = info.GetVarDesc(index).map_err(|e| InspectError::Parsing(format!("GetVarDesc failed: {}", e.message())))?;
             Ok(Self(&*ptr, info))
         }
     }

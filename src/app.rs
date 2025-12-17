@@ -164,7 +164,6 @@ impl App {
             if event::poll(Duration::from_millis(100))?
                 && let Event::Key(key) = event::read()?
                     && key.kind == KeyEventKind::Press {
-                        
                         match key.code {
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.should_quit = true;
@@ -307,7 +306,7 @@ impl App {
                 };
 
                 let result = com_interop::get_type_info(&clsid_clone)
-                    .context(format!("Failed to inspect COM object with CLSID {}", clsid_clone));
+                    .context(format!("Failed to inspect object {}. \nThis may be due to permissions or missing registration.", clsid_clone));
                 
                 let _ = tx.send(result);
             });
@@ -357,7 +356,6 @@ impl App {
             let mut buffer = String::new();
             buffer.push_str(&format!("Type: {}\n", details.name));
             buffer.push_str(&format!("Description: {}\n", details.description));
-            // We don't have CLSID directly in TypeDetails unless passed, omitting for now
             buffer.push('\n');
             
             for member in &details.members {
@@ -441,7 +439,10 @@ fn ui_render(f: &mut Frame, app: &mut App) {
                 let p = Paragraph::new(vec![
                     Line::from(Span::styled("Error Inspecting Object:", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))),
                     Line::from(Span::styled(err_msg, Style::default().fg(Color::Red))),
-                ]).block(Block::default().borders(Borders::ALL).title("Error"));
+                ])
+                .block(Block::default().borders(Borders::ALL).title("Error"))
+                .wrap(ratatui::widgets::Wrap { trim: true });
+                
                 f.render_widget(p, right_pane_area);
             } else if let Some(details) = &app.selected_object {
                 // Split right pane into Metadata and Members

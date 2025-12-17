@@ -8,7 +8,9 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 [![Rust](https://img.shields.io/badge/built_with-Rust-dca282.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 
-[![CI](https://github.com/Volvo/comm_browser/actions/workflows/release.yml/badge.svg)](https://github.com/Volvo/comm_browser/actions/workflows/release.yml)
+[![Build and Release](https://github.com/mberetvas/RustCom-explorer/actions/workflows/release.yml/badge.svg)](https://github.com/mberetvas/RustCom-explorer/actions/workflows/release.yml)
+[![Dependency review](https://github.com/mberetvas/RustCom-explorer/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/mberetvas/RustCom-explorer/actions/workflows/dependency-review.yml)
+[![rust-clippy analyze](https://github.com/mberetvas/RustCom-explorer/actions/workflows/rust-clippy.yml/badge.svg)](https://github.com/mberetvas/RustCom-explorer/actions/workflows/rust-clippy.yml)
 
 **RustCOM Explorer** is a terminal-based utility designed for system integrators, SCADA engineers, and developers who need to interact with Windows COM (Component Object Model) objects.
 

@@ -5,69 +5,81 @@ on:
     branches:
       - main
       - master
+    paths:
+      - 'Cargo.toml'
+      - 'src/**'
+
+permissions:
+  contents: write
 
 jobs:
   check-version:
     name: Check Version
     runs-on: windows-latest
     outputs:
-      should_build: ${{ steps.version-check.outputs.should_build }}
-      cargo_version: ${{ steps.version-check.outputs.cargo_version }}
+      should_build: ${{ steps.check.outputs.should_build }}
+      cargo_version: ${{ steps.check.outputs.cargo_version }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Extract Cargo.toml version
-        id: cargo-version
+      - name: Check version against latest release
+        id: check
         shell: pwsh
-        run: |
-          $content = Get-Content Cargo.toml -Raw
-          if ($content -match 'version\s*=\s*"([^"]+)"') {
-            $version = $matches[1]
-            echo "cargo_version=$version" >> $env:GITHUB_OUTPUT
-            Write-Output "Cargo.toml version: $version"
-          }
-
-      - name: Get latest release version
-        id: latest-release
-        shell: pwsh
-        run: |
-          $latestRelease = gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>$null
-          if ($LASTEXITCODE -eq 0 -and $latestRelease) {
-            $latestVersion = $latestRelease -replace '^v', ''
-            echo "latest_version=$latestVersion" >> $env:GITHUB_OUTPUT
-            Write-Output "Latest release version: $latestVersion"
-          } else {
-            echo "latest_version=0.0.0" >> $env:GITHUB_OUTPUT
-            Write-Output "No previous releases found"
-          }
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compare versions
-        id: version-check
-        shell: pwsh
         run: |
-          $cargoVersion = "${{ steps.cargo-version.outputs.cargo_version }}"
-          $latestVersion = "${{ steps.latest-release.outputs.latest_version }}"
-          
-          # Parse versions
-          $cargo = [version]$cargoVersion
-          $latest = [version]$latestVersion
-          
-          Write-Output "Comparing: Cargo=$cargo vs Latest=$latest"
-          
-          if ($cargo -gt $latest) {
-            echo "should_build=true" >> $env:GITHUB_OUTPUT
-            Write-Output "✓ Version check passed: $cargo > $latest"
+          # 1. Haal Cargo.toml versie op
+          $content = Get-Content Cargo.toml -Raw
+          if ($content -match 'version\s*=\s*"([^"]+)"') {
+            $cargoVerStr = $matches[1]
           } else {
-            echo "should_build=false" >> $env:GITHUB_OUTPUT
-            Write-Output "✗ Version check failed: $cargo is not greater than $latest"
+            Write-Error "Kan versie niet vinden in Cargo.toml"
+            exit 1
+          }
+          Write-Output "Huidige Cargo versie: $cargoVerStr"
+
+          # 2. Haal laatste GitHub Release op
+          $latestReleaseTag = gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>$null
+          
+          if ([string]::IsNullOrWhiteSpace($latestReleaseTag)) {
+            $latestVerStr = "0.0.0"
+            Write-Output "Geen eerdere releases gevonden. Default naar 0.0.0"
+          } else {
+            # Verwijder 'v' prefix indien aanwezig
+            $latestVerStr = $latestReleaseTag -replace '^v', ''
+            Write-Output "Laatste release versie: $latestVerStr"
+          }
+
+          # 3. Vergelijk versies
+          try {
+            $cargoVer = [version]$cargoVerStr
+            $latestVer = [version]$latestVerStr
+            
+            if ($cargoVer -gt $latestVer) {
+              Write-Output "✓ NIEUWE VERSIE: $cargoVer is groter dan $latestVer"
+              echo "should_build=true" >> $env:GITHUB_OUTPUT
+              echo "cargo_version=$cargoVerStr" >> $env:GITHUB_OUTPUT
+            } else {
+              Write-Output "✗ GEEN UPDATE: $cargoVer is niet groter dan $latestVer"
+              echo "should_build=false" >> $env:GITHUB_OUTPUT
+            }
+          } catch {
+            Write-Warning "Kon versies niet als [version] object parsen (mogelijk SemVer suffixes zoals -beta). String vergelijking wordt gebruikt."
+            # Fallback naar simpele string vergelijking als [version] faalt
+            if ($cargoVerStr -ne $latestVerStr) {
+               echo "should_build=true" >> $env:GITHUB_OUTPUT
+               echo "cargo_version=$cargoVerStr" >> $env:GITHUB_OUTPUT
+            } else {
+               echo "should_build=false" >> $env:GITHUB_OUTPUT
+            }
           }
 
   build:
-    name: Build Release
+    name: Build and Upload
     runs-on: windows-latest
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
@@ -86,23 +98,32 @@ jobs:
         run: cargo build --release
         shell: pwsh
 
+      - name: Verify Build Artifact
+        shell: pwsh
+        run: |
+          if (-Not (Test-Path "target/release/comm_browser.exe")) {
+             Write-Error "target/release/comm_browser.exe niet gevonden! Check je bin name in Cargo.toml."
+             exit 1
+          }
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ needs.check-version.outputs.cargo_version }}
+          name: Release v${{ needs.check-version.outputs.cargo_version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
           files: |
             target/release/comm_browser.exe
             target/release/comm_browser.pdb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    
-  build-skipped:
-    name: Build Skipped
+
+  skipped:
+    name: No Release Needed
     runs-on: windows-latest
     needs: check-version
     if: needs.check-version.outputs.should_build == 'false'
-    
     steps:
-      - name: Skip message
-        run: echo "Build skipped - Cargo.toml version (${{ needs.check-version.outputs.cargo_version }}) is not greater than the latest release"
-        shell: pwsh
+      - run: echo "Versie is niet gewijzigd. Geen build nodig."

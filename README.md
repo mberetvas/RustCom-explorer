@@ -53,6 +53,9 @@ The compiled executable will be available in `target/release/comm_browser.exe`.
 
 The application interface is divided into two panes: the **Object List** (left) and **Details/Inspection** (right).
 
+![Example1](example1.png)
+![Example2](example2.png)
+
 ### Navigation & Browsing
 
 COM objects are organized by category based on their ProgID prefix (e.g., "Excel", "Word", "MSXML"). Use arrow keys to browse categories and individual objects.

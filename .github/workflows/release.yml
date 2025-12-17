@@ -32,44 +32,44 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Haal Cargo.toml versie op
+          # 1. Get Cargo.toml version
           $content = Get-Content Cargo.toml -Raw
           if ($content -match 'version\s*=\s*"([^"]+)"') {
             $cargoVerStr = $matches[1]
           } else {
-            Write-Error "Kan versie niet vinden in Cargo.toml"
+            Write-Error "Cannot find version in Cargo.toml"
             exit 1
           }
-          Write-Output "Huidige Cargo versie: $cargoVerStr"
+          Write-Output "Current Cargo version: $cargoVerStr"
 
-          # 2. Haal laatste GitHub Release op
+          # 2. Get latest GitHub Release
           $latestReleaseTag = gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>$null
-          
+
           if ([string]::IsNullOrWhiteSpace($latestReleaseTag)) {
             $latestVerStr = "0.0.0"
-            Write-Output "Geen eerdere releases gevonden. Default naar 0.0.0"
+            Write-Output "No previous releases found. Defaulting to 0.0.0"
           } else {
-            # Verwijder 'v' prefix indien aanwezig
+            # Remove 'v' prefix if present
             $latestVerStr = $latestReleaseTag -replace '^v', ''
-            Write-Output "Laatste release versie: $latestVerStr"
+            Write-Output "Latest release version: $latestVerStr"
           }
 
-          # 3. Vergelijk versies
+          # 3. Compare versions
           try {
             $cargoVer = [version]$cargoVerStr
             $latestVer = [version]$latestVerStr
-            
+
             if ($cargoVer -gt $latestVer) {
-              Write-Output "✓ NIEUWE VERSIE: $cargoVer is groter dan $latestVer"
+              Write-Output "✓ NEW VERSION: $cargoVer is greater than $latestVer"
               echo "should_build=true" >> $env:GITHUB_OUTPUT
               echo "cargo_version=$cargoVerStr" >> $env:GITHUB_OUTPUT
             } else {
-              Write-Output "✗ GEEN UPDATE: $cargoVer is niet groter dan $latestVer"
+              Write-Output "✗ NO UPDATE: $cargoVer is not greater than $latestVer"
               echo "should_build=false" >> $env:GITHUB_OUTPUT
             }
           } catch {
-            Write-Warning "Kon versies niet als [version] object parsen (mogelijk SemVer suffixes zoals -beta). String vergelijking wordt gebruikt."
-            # Fallback naar simpele string vergelijking als [version] faalt
+            Write-Warning "Could not parse versions as [version] object (possibly SemVer suffixes like -beta). Using string comparison."
+            # Fallback to simple string comparison if [version] fails
             if ($cargoVerStr -ne $latestVerStr) {
                echo "should_build=true" >> $env:GITHUB_OUTPUT
                echo "cargo_version=$cargoVerStr" >> $env:GITHUB_OUTPUT
@@ -102,7 +102,7 @@ jobs:
         shell: pwsh
         run: |
           if (-Not (Test-Path "target/release/comm_browser.exe")) {
-             Write-Error "target/release/comm_browser.exe niet gevonden! Check je bin name in Cargo.toml."
+             Write-Error "target/release/comm_browser.exe not found! Check your bin name in Cargo.toml."
              exit 1
           }
 
@@ -126,4 +126,4 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'false'
     steps:
-      - run: echo "Versie is niet gewijzigd. Geen build nodig."
+      - run: echo "Version has not changed. No build needed."

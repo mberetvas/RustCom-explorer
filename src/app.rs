@@ -189,7 +189,6 @@ impl App {
     }
 
     fn handle_inspecting_input(&mut self, key: event::KeyEvent) {
-        // Navigation only works if we have an object with members
         if let Some(details) = &self.selected_object {
             if details.members.is_empty() {
                 return;
@@ -199,6 +198,7 @@ impl App {
                 KeyCode::Down => self.next_member(details.members.len()),
                 KeyCode::Up => self.previous_member(details.members.len()),
                 KeyCode::Char('c') => self.copy_selected_member_to_clipboard(),
+                KeyCode::Char('C') => self.copy_all_members_to_clipboard(),
                 _ => {}
             }
         }
@@ -312,7 +312,7 @@ impl App {
                             if let Err(e) = clipboard.set_text(text_to_copy) {
                                 self.clipboard_status = Some(format!("Clipboard error: {}", e));
                             } else {
-                                self.clipboard_status = Some("Copied!".to_string());
+                                self.clipboard_status = Some("Copied selection!".to_string());
                             }
                         },
                         Err(e) => {
@@ -320,6 +320,45 @@ impl App {
                         }
                     }
                 }
+    }
+
+    fn copy_all_members_to_clipboard(&mut self) {
+         if let Some(details) = &self.selected_object {
+            let mut buffer = String::new();
+            buffer.push_str(&format!("Type: {}\n", details.name));
+            buffer.push_str(&format!("Description: {}\n", details.description));
+            // We don't have CLSID directly in TypeDetails unless passed, omitting for now
+            buffer.push('\n');
+            
+            for member in &details.members {
+                match member {
+                    Member::Method { name, signature, .. } => {
+                        buffer.push_str(&format!("Method {}{}\n", name, signature));
+                    },
+                    Member::Property { name, value_type, access } => {
+                         let access_str = match access {
+                            AccessMode::Read => "Read",
+                            AccessMode::Write => "Write",
+                            AccessMode::ReadWrite => "Read/Write",
+                        };
+                        buffer.push_str(&format!("Property {}: {} [{}]\n", name, value_type, access_str));
+                    }
+                }
+            }
+
+            match Clipboard::new() {
+                Ok(mut clipboard) => {
+                    if let Err(e) = clipboard.set_text(buffer) {
+                        self.clipboard_status = Some(format!("Clipboard error: {}", e));
+                    } else {
+                        self.clipboard_status = Some("Copied all members!".to_string());
+                    }
+                },
+                Err(e) => {
+                     self.clipboard_status = Some(format!("Clipboard init error: {}", e));
+                }
+            }
+        }
     }
 }
 
@@ -379,7 +418,7 @@ fn ui_render(f: &mut Frame, app: &mut App) {
                 let right_chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
-                        Constraint::Length(7), // Fixed height for metadata
+                        Constraint::Length(8), // Fixed height for metadata
                         Constraint::Min(0),    // Remaining for members
                     ])
                     .split(right_pane_area);
@@ -389,7 +428,7 @@ fn ui_render(f: &mut Frame, app: &mut App) {
                     Line::from(vec![Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD)), Span::raw(&details.name)]),
                     Line::from(vec![Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD)), Span::raw(&details.description)]),
                     Line::from(""),
-                    Line::from(Span::styled("Press 'c' to copy selected member signature.", Style::default().fg(Color::DarkGray))),
+                    Line::from(Span::styled("Copy: 'c' (Item) | 'Shift+C' (All)", Style::default().fg(Color::DarkGray))),
                 ];
                 
                 let meta_block = Paragraph::new(meta_text)
@@ -495,7 +534,7 @@ fn ui_render(f: &mut Frame, app: &mut App) {
     };
 
     let status_text = format!(
-        "Mode: {} | Obj: {} {}{} | <Enter>: Insp | <Esc>: Back | <c>: Copy", 
+        "Mode: {} | Obj: {} {}{} | <Enter>: Insp | <Esc>: Back | <c/C>: Copy", 
         mode_str,
         current_selection_name,
         search_status,

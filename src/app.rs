@@ -17,7 +17,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use arboard::Clipboard;
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashSet, BTreeMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
@@ -32,6 +32,12 @@ pub struct Notification {
     pub duration: Duration,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TreeItem {
+    Category { name: String, count: usize, expanded: bool },
+    Object(usize), // Stores index into app.objects_list instead of reference
+}
+
 pub struct App {
     pub objects_list: Vec<ComObject>,
     pub search_query: String,
@@ -39,6 +45,9 @@ pub struct App {
     pub app_mode: AppMode,
     pub should_quit: bool,
     
+    // Categorization State
+    pub expanded_categories: HashSet<String>,
+
     // State for Inspecting Mode
     pub selected_object: Option<TypeDetails>,
     pub error_message: Option<String>,
@@ -50,35 +59,11 @@ pub struct App {
     pub current_notification_start: Option<Instant>,
 }
 
-/// Helper function to filter objects based on a query.
-fn filter_objects<'a>(objects: &'a [ComObject], query: &str) -> Vec<&'a ComObject> {
-    if query.is_empty() {
-        return objects.iter().collect();
-    }
-
-    let matcher = SkimMatcherV2::default();
-
-    let mut scored: Vec<(i64, &'a ComObject)> = objects.iter()
-        .filter_map(|obj| {
-            let s_name = matcher.fuzzy_match(&obj.name, query).map(|s| s + 10);
-            let s_clsid = matcher.fuzzy_match(&obj.clsid, query).map(|s| s + 5);
-            let s_desc = matcher.fuzzy_match(&obj.description, query);
-
-            let max_score = [s_name, s_clsid, s_desc]
-                .iter()
-                .filter_map(|&s| s)
-                .max();
-
-            max_score.map(|score| (score, obj))
-        })
-        .collect();
-
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
-    scored.into_iter().map(|(_, obj)| obj).collect()
-}
-
 impl App {
-    pub fn new(objects: Vec<ComObject>) -> Self {
+    pub fn new(mut objects: Vec<ComObject>) -> Self {
+        // Sort objects by name to ensure consistent initial order
+        objects.sort_by(|a, b| a.name.cmp(&b.name));
+
         let mut list_state = ListState::default();
         if !objects.is_empty() {
             list_state.select(Some(0));
@@ -90,6 +75,7 @@ impl App {
             list_state,
             app_mode: AppMode::Browsing,
             should_quit: false,
+            expanded_categories: HashSet::new(),
             selected_object: None,
             error_message: None,
             inspection_receiver: None,
@@ -97,10 +83,6 @@ impl App {
             notifications: VecDeque::new(),
             current_notification_start: None,
         }
-    }
-
-    pub fn get_filtered_objects(&self) -> Vec<&ComObject> {
-        filter_objects(&self.objects_list, &self.search_query)
     }
 
     pub fn show_notification(&mut self, message: String, duration_ms: u64) {
@@ -112,18 +94,80 @@ impl App {
 
     fn tick_notifications(&mut self) {
         if let Some(notification) = self.notifications.front() {
-            // Start timer if new notification just appeared at front
             if self.current_notification_start.is_none() {
                 self.current_notification_start = Some(Instant::now());
             }
 
-            // Check if expired
             if let Some(start) = self.current_notification_start
                 && start.elapsed() >= notification.duration {
                     self.notifications.pop_front();
                     self.current_notification_start = None;
                 }
         }
+    }
+
+    /// Compiles the view items: Filters -> Groups -> Flattens based on expansion.
+    /// Returns indices (usize) instead of references to avoid borrowing `self`.
+    pub fn get_view_items(&self) -> Vec<TreeItem> {
+        let matcher = SkimMatcherV2::default();
+        
+        // 1. Filter and Score
+        // We store (score, index, object_ref) temporary for sorting/grouping
+        let mut scored: Vec<(i64, usize, &ComObject)> = self.objects_list.iter()
+            .enumerate()
+            .filter_map(|(idx, obj)| {
+                if self.search_query.is_empty() {
+                    return Some((0, idx, obj));
+                }
+
+                let s_name = matcher.fuzzy_match(&obj.name, &self.search_query).map(|s| s + 10);
+                let s_clsid = matcher.fuzzy_match(&obj.clsid, &self.search_query).map(|s| s + 5);
+                let s_desc = matcher.fuzzy_match(&obj.description, &self.search_query);
+
+                let max_score = [s_name, s_clsid, s_desc].iter().filter_map(|&s| s).max();
+                max_score.map(|score| (score, idx, obj))
+            })
+            .collect();
+
+        // Sort by score descending if searching
+        if !self.search_query.is_empty() {
+            scored.sort_by(|a, b| b.0.cmp(&a.0));
+        }
+
+        // 2. Group by Prefix
+        // BTreeMap<CategoryName, Vec<(OriginalIndex, ObjectRef)>>
+        let mut groups: BTreeMap<String, Vec<(usize, &ComObject)>> = BTreeMap::new();
+        for (_, idx, obj) in scored {
+            let prefix = obj.name.split('.').next().unwrap_or("Misc").to_string();
+            groups.entry(prefix).or_default().push((idx, obj));
+        }
+
+        // 3. Flatten into TreeItems
+        let mut items = Vec::new();
+        // BTreeMap iterates keys alphabetically
+        for (category, mut objs) in groups {
+            let is_searching = !self.search_query.is_empty();
+            let is_expanded = self.expanded_categories.contains(&category) || is_searching;
+            
+            items.push(TreeItem::Category { 
+                name: category.clone(), 
+                count: objs.len(), 
+                expanded: is_expanded 
+            });
+
+            if is_expanded {
+                if !is_searching {
+                    // Sort alphabetically within category if not searching
+                    objs.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+                }
+                
+                for (idx, _) in objs {
+                    items.push(TreeItem::Object(idx));
+                }
+            }
+        }
+
+        items
     }
 
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
@@ -134,7 +178,6 @@ impl App {
                     Ok(result) => {
                         match result {
                             Ok(details) => {
-                                // Reset member selection when new object is loaded
                                 if !details.members.is_empty() {
                                     self.member_list_state.select(Some(0));
                                 } else {
@@ -156,10 +199,13 @@ impl App {
                 }
             }
 
-            // Update notifications state
             self.tick_notifications();
 
-            terminal.draw(|f| ui_render(f, self))?;
+            // Calculate view items once per frame
+            // Now returns Vec<TreeItem> which owns its data (indices), so no borrow of `self` persists
+            let view_items = self.get_view_items();
+
+            terminal.draw(|f| ui_render(f, self, &view_items))?;
 
             if event::poll(Duration::from_millis(100))?
                 && let Event::Key(key) = event::read()?
@@ -168,7 +214,6 @@ impl App {
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.should_quit = true;
                             }
-                            // Global Navigation
                             KeyCode::Esc => {
                                 if self.app_mode == AppMode::Inspecting {
                                     self.exit_inspection();
@@ -178,9 +223,8 @@ impl App {
                                 }
                             }
                             
-                            // Mode Specific Handling
                             _ => match self.app_mode {
-                                AppMode::Browsing => self.handle_browsing_input(key),
+                                AppMode::Browsing => self.handle_browsing_input(key, &view_items),
                                 AppMode::Inspecting => self.handle_inspecting_input(key),
                                 _ => {}
                             }
@@ -194,27 +238,23 @@ impl App {
         Ok(())
     }
 
-    fn handle_browsing_input(&mut self, key: event::KeyEvent) {
+    fn handle_browsing_input(&mut self, key: event::KeyEvent, view_items: &[TreeItem]) {
         match key.code {
             KeyCode::Char(c) => {
                 self.search_query.push(c);
-                if !self.get_filtered_objects().is_empty() {
+                if !view_items.is_empty() {
                     self.list_state.select(Some(0));
-                } else {
-                    self.list_state.select(None);
                 }
             }
             KeyCode::Backspace => {
                 let _ = self.search_query.pop();
-                if !self.get_filtered_objects().is_empty() {
+                if !view_items.is_empty() {
                     self.list_state.select(Some(0));
-                } else {
-                    self.list_state.select(None);
                 }
             }
-            KeyCode::Down => self.next_object(),
-            KeyCode::Up => self.previous_object(),
-            KeyCode::Enter => self.inspect_selected(),
+            KeyCode::Down => self.next_item(view_items.len()),
+            KeyCode::Up => self.previous_item(view_items.len()),
+            KeyCode::Enter => self.handle_enter_key(view_items),
             _ => {}
         }
     }
@@ -235,26 +275,43 @@ impl App {
         }
     }
 
-    fn next_object(&mut self) {
-        let filtered = self.get_filtered_objects();
-        if filtered.is_empty() { return; }
-        
+    fn next_item(&mut self, count: usize) {
+        if count == 0 { return; }
         let new_idx = match self.list_state.selected() {
-            Some(i) => if i >= filtered.len() - 1 { 0 } else { i + 1 },
+            Some(i) => if i >= count - 1 { 0 } else { i + 1 },
             None => 0,
         };
         self.list_state.select(Some(new_idx));
     }
 
-    fn previous_object(&mut self) {
-        let filtered = self.get_filtered_objects();
-        if filtered.is_empty() { return; }
-
+    fn previous_item(&mut self, count: usize) {
+        if count == 0 { return; }
         let new_idx = match self.list_state.selected() {
-            Some(i) => if i == 0 { filtered.len() - 1 } else { i - 1 },
+            Some(i) => if i == 0 { count - 1 } else { i - 1 },
             None => 0,
         };
         self.list_state.select(Some(new_idx));
+    }
+
+    fn handle_enter_key(&mut self, view_items: &[TreeItem]) {
+        if let Some(idx) = self.list_state.selected()
+            && let Some(item) = view_items.get(idx) {
+                match item {
+                    TreeItem::Category { name, .. } => {
+                        // Toggle expansion
+                        if self.expanded_categories.contains(name) {
+                            self.expanded_categories.remove(name);
+                        } else {
+                            self.expanded_categories.insert(name.clone());
+                        }
+                    },
+                    TreeItem::Object(obj_idx) => {
+                        if let Some(obj) = self.objects_list.get(*obj_idx) {
+                             self.inspect_object(obj.clsid.clone());
+                        }
+                    }
+                }
+            }
     }
 
     fn next_member(&mut self, count: usize) {
@@ -275,42 +332,33 @@ impl App {
         self.member_list_state.select(Some(new_idx));
     }
 
-    fn inspect_selected(&mut self) {
-        let clsid_opt = {
-            let filtered = self.get_filtered_objects();
-            self.list_state.selected()
-                .and_then(|index| filtered.get(index))
-                .map(|obj| obj.clsid.clone())
-        };
+    fn inspect_object(&mut self, clsid: String) {
+        self.selected_object = None;
+        self.error_message = None;
+        self.inspection_receiver = None;
+        self.member_list_state = ListState::default();
+        
+        self.app_mode = AppMode::Inspecting;
 
-        if let Some(clsid) = clsid_opt {
-            self.selected_object = None;
-            self.error_message = None;
-            self.inspection_receiver = None;
-            self.member_list_state = ListState::default();
+        let (tx, rx) = mpsc::channel();
+        self.inspection_receiver = Some(rx);
+
+        let clsid_clone = clsid.clone();
+        
+        thread::spawn(move || {
+            let _com_guard = match com_interop::initialize_com() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
+            };
+
+            let result = com_interop::get_type_info(&clsid_clone)
+                .context(format!("Failed to inspect object {}. \nThis may be due to permissions or missing registration.", clsid_clone));
             
-            self.app_mode = AppMode::Inspecting;
-
-            let (tx, rx) = mpsc::channel();
-            self.inspection_receiver = Some(rx);
-
-            let clsid_clone = clsid.clone();
-            
-            thread::spawn(move || {
-                let _com_guard = match com_interop::initialize_com() {
-                    Ok(guard) => guard,
-                    Err(e) => {
-                        let _ = tx.send(Err(e));
-                        return;
-                    }
-                };
-
-                let result = com_interop::get_type_info(&clsid_clone)
-                    .context(format!("Failed to inspect object {}. \nThis may be due to permissions or missing registration.", clsid_clone));
-                
-                let _ = tx.send(result);
-            });
-        }
+            let _ = tx.send(result);
+        });
     }
 
     fn exit_inspection(&mut self) {
@@ -390,7 +438,7 @@ impl App {
     }
 }
 
-fn ui_render(f: &mut Frame, app: &mut App) {
+fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -407,26 +455,40 @@ fn ui_render(f: &mut Frame, app: &mut App) {
         ])
         .split(chunks[0]);
 
-    // Left Pane: Object List
-    let objects_list = &app.objects_list;
-    let search_query = &app.search_query;
-    let filtered_objects = filter_objects(objects_list, search_query);
+    // Left Pane: Object List (Tree View)
+    let list_items: Vec<ListItem> = view_items.iter().map(|item| {
+        match item {
+            TreeItem::Category { name, count, expanded } => {
+                let icon = if *expanded { "▼" } else { "▶" };
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{} {} ", icon, name), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("({})", count), Style::default().fg(Color::DarkGray)),
+                ]))
+            },
+            TreeItem::Object(idx) => {
+                if let Some(obj) = app.objects_list.get(*idx) {
+                    ListItem::new(Line::from(vec![
+                        Span::raw("  "), // Indentation
+                        Span::raw(&obj.name),
+                        Span::styled(format!(" ({})", obj.clsid), Style::default().fg(Color::DarkGray)),
+                    ]))
+                } else {
+                    ListItem::new("Invalid Object")
+                }
+            }
+        }
+    }).collect();
 
-    let items: Vec<ListItem> = filtered_objects
-        .iter()
-        .map(|obj| ListItem::new(format!("{} ({})", obj.name, obj.clsid)))
-        .collect();
-
-    let list_title = if search_query.is_empty() {
+    let list_title = if app.search_query.is_empty() {
         "COM Objects".to_string()
     } else {
-        format!("COM Objects (Filter: '{}')", search_query)
+        format!("COM Objects (Filter: '{}')", app.search_query)
     };
 
-    let list = List::new(items)
+    let list = List::new(list_items)
         .block(Block::default().borders(Borders::ALL).title(list_title))
         .highlight_style(Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD))
-        .highlight_symbol(">> ");
+        .highlight_symbol(" "); 
     
     f.render_stateful_widget(list, main_chunks[0], &mut app.list_state);
 
@@ -511,19 +573,35 @@ fn ui_render(f: &mut Frame, app: &mut App) {
                 .title("Details");
 
             let details_text = if let Some(idx) = app.list_state.selected() {
-                if let Some(obj) = filtered_objects.get(idx) {
-                    vec![
-                        Line::from(Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD))),
-                        Line::from(obj.name.as_str()),
-                        Line::from(""),
-                        Line::from(Span::styled("CLSID: ", Style::default().add_modifier(Modifier::BOLD))),
-                        Line::from(obj.clsid.as_str()),
-                        Line::from(""),
-                        Line::from(Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD))),
-                        Line::from(obj.description.as_str()),
-                        Line::from(""),
-                        Line::from(Span::styled("Hint: Press <Enter> to inspect details.", Style::default().fg(Color::Gray))),
-                    ]
+                if let Some(item) = view_items.get(idx) {
+                    match item {
+                        TreeItem::Category { name, count, .. } => vec![
+                            Line::from(Span::styled("Category: ", Style::default().add_modifier(Modifier::BOLD))),
+                            Line::from(name.as_str()),
+                            Line::from(""),
+                            Line::from(format!("Contains {} objects", count)),
+                            Line::from(""),
+                            Line::from(Span::styled("Hint: Press <Enter> to expand/collapse.", Style::default().fg(Color::Gray))),
+                        ],
+                        TreeItem::Object(idx) => {
+                             if let Some(obj) = app.objects_list.get(*idx) {
+                                vec![
+                                    Line::from(Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD))),
+                                    Line::from(obj.name.as_str()),
+                                    Line::from(""),
+                                    Line::from(Span::styled("CLSID: ", Style::default().add_modifier(Modifier::BOLD))),
+                                    Line::from(obj.clsid.as_str()),
+                                    Line::from(""),
+                                    Line::from(Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD))),
+                                    Line::from(obj.description.as_str()),
+                                    Line::from(""),
+                                    Line::from(Span::styled("Hint: Press <Enter> to inspect details.", Style::default().fg(Color::Gray))),
+                                ]
+                             } else {
+                                 vec![Line::from("Unknown Object")]
+                             }
+                        }
+                    }
                 } else {
                     vec![Line::from("Selected index out of bounds")]
                 }
@@ -541,9 +619,15 @@ fn ui_render(f: &mut Frame, app: &mut App) {
 
     // Bottom Bar
     let current_selection_name = if let Some(idx) = app.list_state.selected() {
-         filtered_objects.get(idx).map(|o| o.name.as_str()).unwrap_or("Unknown")
+         match view_items.get(idx) {
+             Some(TreeItem::Category { name, .. }) => format!("Category: {}", name),
+             Some(TreeItem::Object(idx)) => {
+                 app.objects_list.get(*idx).map(|o| o.name.clone()).unwrap_or("Unknown".to_string())
+             },
+             None => "Unknown".to_string(),
+         }
     } else {
-        "None"
+        "None".to_string()
     };
 
     let mode_str = match app.app_mode {
@@ -552,14 +636,14 @@ fn ui_render(f: &mut Frame, app: &mut App) {
         AppMode::Inspecting => "INSPECTING",
     };
 
-    let search_status = if search_query.is_empty() {
+    let search_status = if app.search_query.is_empty() {
         "".to_string()
     } else {
-        format!(" | Search: '{}'", search_query)
+        format!(" | Search: '{}'", app.search_query)
     };
 
     let status_text = format!(
-        "Mode: {} | Obj: {} {} | <Enter>: Insp | <Esc>: Back | <c/C>: Copy", 
+        "Mode: {} | Obj: {} {} | <Enter>: Expand/Insp | <Esc>: Back | <c/C>: Copy", 
         mode_str,
         current_selection_name,
         search_status

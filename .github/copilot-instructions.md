@@ -1,58 +1,55 @@
-# Copilot Instructions for `comm_browser` (RustCOM Explorer)
+# Copilot Instructions for `comm_browser`
 
-## Project Overview
+## 1. Project Context & Principles
+- **Core Domain:** A TUI tool for inspecting Windows COM/ActiveX objects (ProgIDs, CLSIDs, TypeLibs) without instantiation.
+- **Platform Strategy:** Code is Windows-native. Non-Windows builds are stubs only.
+- **Safety Philosophy:**
+  - **Static over Dynamic:** Always prefer reading static registry data (`LoadRegTypeLib`) over instantiating objects (`CoCreateInstance`) to prevent side effects.
+  - **No Panics:** The tool must never crash on malformed registry data or permission errors. Use `Result` and UI notifications.
+  - **RAII:** All FFI/unsafe resources (COM initialization, raw pointers) must be wrapped in structs that handle cleanup in `Drop`.
 
-- **Purpose:** TUI tool for Windows to browse, filter, and inspect registered COM/ActiveX objects (e.g., WinCC providers) and their type information, optimized for remote/CLI use.
-- **Key Features:** Registry scanning, fuzzy search/filter, safe type inspection (without instantiating objects), and clipboard integration.
+## 2. Architectural Boundaries
+The application follows a strict separation of concerns that must be preserved:
 
-## Architecture & Key Modules
+### A. The UI Layer (Presentation)
+- **Role:** Handles rendering, input processing, and state management.
+- **Key Pattern:** **Immediate Mode TUI**. The UI is a function of the central state (`App`).
+- **Concurrency:** The main thread **must never block** on IO or Registry calls.
+  - *Pattern:* Use `std::sync::mpsc` (or similar channels) to receive data from background worker threads.
+  - *State:* The `App` struct checks the receiver channel once per tick to update the UI.
 
-- **Data Layer:**  
-  - `scanner.rs`: Scans `HKEY_CLASSES_ROOT` for COM objects (`ProgID`, `CLSID`, `Description`).  
-  - `com_interop.rs` (planned): Handles COM initialization and safe type info retrieval (`ITypeInfo`), prioritizing `LoadRegTypeLib` for safety.
-- **View Layer:**  
-  - TUI built with `ratatui` and `crossterm`.  
-  - Split layout: Left pane (object list), right pane (member details), bottom bar (help/status).
-- **State Management:**  
-  - Central `App` struct holds object list, search query, selected object, and app mode (`Scanning`, `Browsing`, `Inspecting`).
+### B. The Interop Layer (Infrastructure)
+- **Role:** Wraps `unsafe` OS APIs (Windows COM/OLE) into safe Rust abstractions.
+- **Isolation:** Keep `unsafe` code restricted to specific interop modules. Do not leak raw Windows types (like `BSTR` or `HRESULT`) into the UI layer.
+- **Data Conversion:** Parse cryptic OS structures (`FUNCDESC`, `VARDESC`) into human-readable Rust structs (`TypeDetails`, `Member`) immediately.
 
-## Developer Workflows
+### C. The Data/Scanner Layer
+- **Role:** Enumerates system resources (Registry keys).
+- **Testability Pattern:** **Trait-based Abstraction**.
+  - Logic accessing the system (e.g., Registry) must rely on traits (e.g., `RegistryReader`, `RegistryKey`).
+  - *Reasoning:* This allows unit tests to run on non-Windows machines and without admin privileges by using Mock implementations.
+  - **Rule:** Never write logic that directly instantiates a concrete system accessor (like `winreg::RegKey`) inside business logic; accept it as a dependency or trait object.
 
-- **Build:**  
-  - Standard: `cargo build`  
-  - Run: `cargo run`
-- **Linting & Quality:**  
-  - **Always run `cargo clippy` before finalizing a task** to catch common mistakes and ensure code quality.
-- **Testing:**  
-  - **Use Test-Driven Development (TDD)** unless explicitly specified otherwise. Write tests before implementation to define expected behavior.
-  - Currently no formal test suite; focus on manual verification (see Docs/prd.md, tasks_and_lists.md) for acceptance testing.
-- **Debugging:**  
-  - Use `println!` or logging for diagnostics.  
-  - Handle errors gracefully—never crash on COM/registry failures; display errors in the TUI.
+## 3. Developer Workflows & Conventions
 
-## Patterns & Conventions
+### Testing
+- **Unit Tests:** Focus on the Data Layer using Mocks. *Do not* write tests that require a real running Windows registry unless marked `#[cfg(windows)]` and strictly necessary.
+- **TDD:** When adding new scanner features, extend the Mock struct first to represent the registry structure you expect to find.
 
-- **Registry/COM Access:**  
-  - Use `winreg` for registry, `windows` crate for COM APIs.  
-  - Always prefer type library inspection over direct instantiation for safety.
-- **Fuzzy Search:**  
-  - Use `fuzzy-matcher` for real-time filtering of the object list.
-- **Clipboard:**  
-  - Use `arboard` to copy function signatures on keypress (`c`).
-- **Error Handling:**  
-  - All COM/registry errors must be caught and shown in the UI, not as panics.
-- **UI Layout:**  
-  - Follow the split-pane pattern described in Docs/tasks_and_lists.md.
+### Error Handling
+- **User-Facing:** COM errors are information, not failures. Display them in the UI (e.g., "Permission Denied").
+- **Internal:** Use the `anyhow` or custom `InspectError` pattern. Map numeric HRESULTs to readable messages before bubbling up.
 
-## Integration Points
+### Coding Style
+- **Modules:** Keep `main.rs` minimal (setup only). Logic belongs in `lib.rs` modules.
+- **Clarity:** When using FFI, explicitly document the `unsafe` invariants.
 
-- **External Crates:**  
-  - `ratatui`, `crossterm`, `windows`, `winreg`, `fuzzy-matcher`, `arboard`, `anyhow`.
-- **Windows Only:**  
-  - All COM/registry logic assumes a Windows environment.
+## 4. Key Libraries & ecosystem
+(Check `Cargo.toml` for versions, but understand the roles)
+- **UI:** `ratatui` (Rendering), `crossterm` (Input).
+- **System:** `windows` (Official bindings), `winreg` (Registry).
+- **Utilities:** `fuzzy-matcher` (Search), `arboard` (Clipboard).
 
-## References
-
-- See `Docs/prd.md` for product goals and user stories.
-- See `Docs/tasks_and_lists.md` for implementation phases and module responsibilities.
-- See `Cargo.toml` for dependency versions and features.
+## 5. Discoverability
+- **Finding State:** Look for the central struct (usually `App`) that implements the run loop.
+- **Finding System Calls:** Look for modules implementing `RegistryReader` or wrapping `CoCreateInstance`.

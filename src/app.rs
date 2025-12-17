@@ -1,14 +1,14 @@
 // src/app.rs
 use ratatui::{
     backend::Backend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Clear},
     Frame, Terminal,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use crate::scanner::ComObject;
 use crate::error_handling::{Result, Context};
 use crate::com_interop::{self, TypeDetails, Member, AccessMode};
@@ -17,12 +17,19 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use arboard::Clipboard;
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
     Scanning,
     Browsing,
     Inspecting,
+}
+
+#[derive(Debug, Clone)]
+pub struct Notification {
+    pub message: String,
+    pub duration: Duration,
 }
 
 pub struct App {
@@ -37,7 +44,10 @@ pub struct App {
     pub error_message: Option<String>,
     pub inspection_receiver: Option<Receiver<Result<TypeDetails>>>,
     pub member_list_state: ListState,
-    pub clipboard_status: Option<String>,
+    
+    // Notification Queue
+    pub notifications: VecDeque<Notification>,
+    pub current_notification_start: Option<Instant>,
 }
 
 /// Helper function to filter objects based on a query.
@@ -84,12 +94,36 @@ impl App {
             error_message: None,
             inspection_receiver: None,
             member_list_state: ListState::default(),
-            clipboard_status: None,
+            notifications: VecDeque::new(),
+            current_notification_start: None,
         }
     }
 
     pub fn get_filtered_objects(&self) -> Vec<&ComObject> {
         filter_objects(&self.objects_list, &self.search_query)
+    }
+
+    pub fn show_notification(&mut self, message: String, duration_ms: u64) {
+        self.notifications.push_back(Notification {
+            message,
+            duration: Duration::from_millis(duration_ms),
+        });
+    }
+
+    fn tick_notifications(&mut self) {
+        if let Some(notification) = self.notifications.front() {
+            // Start timer if new notification just appeared at front
+            if self.current_notification_start.is_none() {
+                self.current_notification_start = Some(Instant::now());
+            }
+
+            // Check if expired
+            if let Some(start) = self.current_notification_start
+                && start.elapsed() >= notification.duration {
+                    self.notifications.pop_front();
+                    self.current_notification_start = None;
+                }
+        }
     }
 
     pub fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
@@ -122,17 +156,15 @@ impl App {
                 }
             }
 
+            // Update notifications state
+            self.tick_notifications();
+
             terminal.draw(|f| ui_render(f, self))?;
 
             if event::poll(Duration::from_millis(100))?
                 && let Event::Key(key) = event::read()?
                     && key.kind == KeyEventKind::Press {
                         
-                        // Clear transient clipboard status on any key press
-                        if self.clipboard_status.is_some() {
-                            self.clipboard_status = None;
-                        }
-
                         match key.code {
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.should_quit = true;
@@ -256,7 +288,6 @@ impl App {
             self.selected_object = None;
             self.error_message = None;
             self.inspection_receiver = None;
-            self.clipboard_status = None;
             self.member_list_state = ListState::default();
             
             self.app_mode = AppMode::Inspecting;
@@ -289,7 +320,6 @@ impl App {
             self.selected_object = None;
             self.error_message = None;
             self.inspection_receiver = None;
-            self.clipboard_status = None;
             self.member_list_state = ListState::default();
         }
     }
@@ -310,13 +340,13 @@ impl App {
                     match Clipboard::new() {
                         Ok(mut clipboard) => {
                             if let Err(e) = clipboard.set_text(text_to_copy) {
-                                self.clipboard_status = Some(format!("Clipboard error: {}", e));
+                                self.show_notification(format!("Clipboard error: {}", e), 3000);
                             } else {
-                                self.clipboard_status = Some("Copied selection!".to_string());
+                                self.show_notification("Copied selection!".to_string(), 2000);
                             }
                         },
                         Err(e) => {
-                             self.clipboard_status = Some(format!("Clipboard init error: {}", e));
+                             self.show_notification(format!("Clipboard init error: {}", e), 3000);
                         }
                     }
                 }
@@ -349,13 +379,13 @@ impl App {
             match Clipboard::new() {
                 Ok(mut clipboard) => {
                     if let Err(e) = clipboard.set_text(buffer) {
-                        self.clipboard_status = Some(format!("Clipboard error: {}", e));
+                        self.show_notification(format!("Clipboard error: {}", e), 3000);
                     } else {
-                        self.clipboard_status = Some("Copied all members!".to_string());
+                        self.show_notification("Copied all members!".to_string(), 2000);
                     }
                 },
                 Err(e) => {
-                     self.clipboard_status = Some(format!("Clipboard init error: {}", e));
+                     self.show_notification(format!("Clipboard init error: {}", e), 3000);
                 }
             }
         }
@@ -527,20 +557,52 @@ fn ui_render(f: &mut Frame, app: &mut App) {
         format!(" | Search: '{}'", search_query)
     };
 
-    let clipboard_msg = if let Some(status) = &app.clipboard_status {
-        format!(" | {}", status)
-    } else {
-        "".to_string()
-    };
-
     let status_text = format!(
-        "Mode: {} | Obj: {} {}{} | <Enter>: Insp | <Esc>: Back | <c/C>: Copy", 
+        "Mode: {} | Obj: {} {} | <Enter>: Insp | <Esc>: Back | <c/C>: Copy", 
         mode_str,
         current_selection_name,
-        search_status,
-        clipboard_msg
+        search_status
     );
     let status = Paragraph::new(status_text)
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
     f.render_widget(status, chunks[1]);
+
+    // Render Notification Modal Overlay
+    if let Some(notification) = app.notifications.front() {
+        let area = centered_rect_fixed_height(50, 3, f.area());
+        
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Notification")
+            .style(Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD));
+            
+        let paragraph = Paragraph::new(notification.message.as_str())
+            .block(block)
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .alignment(ratatui::layout::Alignment::Center);
+            
+        f.render_widget(Clear, area); // Clear area behind popup
+        f.render_widget(paragraph, area);
+    }
+}
+
+/// Helper function to create a centered rect of fixed height and percentage width
+fn centered_rect_fixed_height(percent_x: u16, height: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(height),
+            Constraint::Min(0),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }

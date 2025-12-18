@@ -2,6 +2,8 @@
 use std::io;
 use std::fmt::Write as FmtWrite; 
 use std::path::PathBuf;
+use std::collections::BTreeMap;
+use serde::Serialize;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -43,6 +45,15 @@ impl Drop for Tui {
     }
 }
 
+/// Helper struct for JSON export that includes deep inspection details.
+#[derive(Serialize)]
+struct EnhancedComObject {
+    #[serde(flatten)]
+    base: scanner::ComObject,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<com_interop::TypeDetails>,
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let _com_guard = com_interop::initialize_com()?;
@@ -66,8 +77,29 @@ fn main() -> Result<()> {
 
             // C. Format
             let (output_content, ext) = if list_args.json {
+                let mut enhanced_groups = BTreeMap::new();
+                
+                // Warn user if inspecting a large number of objects as it involves heavy COM/Registry calls
+                let total_objects: usize = grouped_objects.values().map(|v| v.len()).sum();
+                if total_objects > 50 {
+                    eprintln!("Inspecting {} objects for details... This may take a while.", total_objects);
+                }
+
+                for (category, objects) in grouped_objects {
+                    let mut enhanced_list = Vec::with_capacity(objects.len());
+                    for obj in objects {
+                        // Attempt to fetch full type info (members, properties, etc.)
+                        let details = com_interop::get_type_info(&obj.clsid).ok();
+                        enhanced_list.push(EnhancedComObject {
+                            base: obj,
+                            details,
+                        });
+                    }
+                    enhanced_groups.insert(category, enhanced_list);
+                }
+
                 (
-                    serde_json::to_string_pretty(&grouped_objects)
+                    serde_json::to_string_pretty(&enhanced_groups)
                         .expect("Failed to serialize COM objects to JSON"),
                     "json"
                 )
@@ -91,8 +123,6 @@ fn main() -> Result<()> {
                 let mut path = PathBuf::from(raw_path);
                 
                 // Smart Extension Handling:
-                // If the filename doesn't end with the correct extension, append it.
-                // We use append instead of set_extension to avoid replacing parts of filenames like "my.report" -> "my.txt"
                 let should_append = path.file_name()
                     .map(|name| {
                         !name.to_string_lossy()

@@ -1,5 +1,5 @@
 [package]
-name = "comm_browser"
+name = "rustcom-explorer"
 version = "0.2.0"
 edition = "2024"
 

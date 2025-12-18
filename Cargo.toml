@@ -1,6 +1,6 @@
 [package]
 name = "rustcom_explorer"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 [dependencies]
@@ -10,6 +10,7 @@ clap = { version = "4.5.53", features = ["derive"] }
 crossterm = "0.29.0"
 fuzzy-matcher = "0.3.7"
 ratatui = "0.29.0"
+rayon = "1.11.0"
 serde = {version = "1.0.228", features = ["derive"]}
 serde_json = "1.0.145"
 winreg = "0.55.0"

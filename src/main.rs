@@ -12,6 +12,10 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use clap::Parser;
 use rustcom_explorer::{app::App, com_interop, scanner, error_handling::Result, cli::{Args, Commands}};
 
+// Parallelism & COM Imports
+use rayon::prelude::*;
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+
 /// RAII wrapper for TUI terminal setup and teardown.
 pub struct Tui {
     pub terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
@@ -54,14 +58,47 @@ struct EnhancedComObject {
     details: Option<com_interop::TypeDetails>,
 }
 
+/// Configures the Rayon global thread pool with COM initialization.
+fn configure_rayon_pool() -> Result<()> {
+    rayon::ThreadPoolBuilder::new()
+        .start_handler(|_| unsafe {
+            // Initialize COM as Multi-Threaded on each worker thread
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        })
+        .exit_handler(|_| unsafe {
+            CoUninitialize();
+        })
+        .build_global()
+        .map_err(|e| anyhow::anyhow!("Failed to configure Rayon thread pool: {}", e))
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
+    
+    // Logging and Verbosity
+    if args.verbose {
+        eprintln!("[INFO] Verbose logging enabled.");
+        if args.unsafe_mode {
+            eprintln!("[WARN] UNSAFE MODE ENABLED. Objects missing Type Libraries will be instantiated.");
+        } else {
+            eprintln!("[INFO] Safety mode engaged. Only Registry Type Libraries will be inspected.");
+        }
+    }
+
+    // 1. Configure Thread Pool (Must be done before any parallel ops)
+    configure_rayon_pool()?;
+
+    // 2. Main Thread COM Init
     let _com_guard = com_interop::initialize_com()?;
     
     match args.command {
         Some(Commands::List(list_args)) => {
             // --- CLI Mode: List ---
             
+            if args.verbose {
+                eprintln!("[INFO] Scanning Registry for COM Objects...");
+            }
+
             // A. Scan
             let objects = match scanner::scan_com_objects() {
                 Ok(objs) => objs,
@@ -71,6 +108,10 @@ fn main() -> Result<()> {
                 }
             };
             
+            if args.verbose {
+                eprintln!("[INFO] Found {} objects. Filtering...", objects.len());
+            }
+
             // B. Filter
             let filter_query = list_args.filter.as_deref().unwrap_or("");
             let grouped_objects = rustcom_explorer::processor::process_objects(objects, filter_query);
@@ -79,23 +120,37 @@ fn main() -> Result<()> {
             let (output_content, ext) = if list_args.json {
                 let mut enhanced_groups = BTreeMap::new();
                 
-                // Warn user if inspecting a large number of objects as it involves heavy COM/Registry calls
-                let total_objects: usize = grouped_objects.values().map(|v| v.len()).sum();
-                if total_objects > 50 {
-                    eprintln!("Inspecting {} objects for details... This may take a while.", total_objects);
-                }
+                // 1. Flatten the grouped structure for parallel processing
+                let flat_objects: Vec<(String, scanner::ComObject)> = grouped_objects
+                    .into_iter()
+                    .flat_map(|(cat, objs)| objs.into_iter().map(move |obj| (cat.clone(), obj)))
+                    .collect();
 
-                for (category, objects) in grouped_objects {
-                    let mut enhanced_list = Vec::with_capacity(objects.len());
-                    for obj in objects {
-                        // Attempt to fetch full type info (members, properties, etc.)
-                        let details = com_interop::get_type_info(&obj.clsid).ok();
-                        enhanced_list.push(EnhancedComObject {
+                let total_objects = flat_objects.len();
+                let num_threads = rayon::current_num_threads();
+                
+                // UI: Progress Feedback
+                eprintln!("Processing {} objects on {} threads...", total_objects, num_threads);
+
+                // 2. Parallel Deep Inspection
+                let allow_unsafe = args.unsafe_mode;
+                
+                let enhanced_flat: Vec<(String, EnhancedComObject)> = flat_objects
+                    .into_par_iter()
+                    .map(|(category, obj)| {
+                        // Perform the COM/Registry lookup here, respecting safety flag
+                        let details = com_interop::get_type_info(&obj.clsid, allow_unsafe).ok();
+                        
+                        (category, EnhancedComObject {
                             base: obj,
                             details,
-                        });
-                    }
-                    enhanced_groups.insert(category, enhanced_list);
+                        })
+                    })
+                    .collect();
+
+                // 3. Re-group into BTreeMap
+                for (category, obj) in enhanced_flat {
+                    enhanced_groups.entry(category).or_insert_with(Vec::new).push(obj);
                 }
 
                 (
@@ -150,6 +205,10 @@ fn main() -> Result<()> {
         }
         None => {
             // --- TUI Mode ---
+            if args.verbose {
+                eprintln!("[INFO] Starting TUI Mode...");
+            }
+
             println!("Scanning for COM objects... (This may take a moment)");
             let objects = match scanner::scan_com_objects() {
                 Ok(objs) => objs,
@@ -167,7 +226,7 @@ fn main() -> Result<()> {
             }
 
             let mut tui = Tui::new()?;
-            let mut app = App::new(objects);
+            let mut app = App::new(objects, args.unsafe_mode);
             app.run(&mut tui.terminal)?;
         }
     }

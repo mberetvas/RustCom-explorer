@@ -8,6 +8,7 @@ pub enum InspectError {
     Parsing(String),
     Permission(String),
     Generic(String),
+    Safety(String),
 }
 
 impl fmt::Display for InspectError {
@@ -24,6 +25,7 @@ impl fmt::Display for InspectError {
             InspectError::Parsing(msg) => write!(f, "Type Parsing Failed: {}", msg),
             InspectError::Permission(msg) => write!(f, "Permission Denied: {}\nSuggestion: Try running the application as Administrator.", msg),
             InspectError::Generic(msg) => write!(f, "Error: {}", msg),
+            InspectError::Safety(msg) => write!(f, "Safety Violation: {}", msg),
         }
     }
 }

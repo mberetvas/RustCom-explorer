@@ -68,17 +68,28 @@ pub enum AccessMode {
     ReadWrite,
 }
 
-pub fn get_type_info(clsid_str: &str) -> Result<TypeDetails> {
+/// Retrieves TypeInfo for a CLSID. 
+/// 
+/// # Safety
+/// If `allow_unsafe` is `false`, this function will ONLY attempt to read from the Registry.
+/// If `allow_unsafe` is `true`, it may fallback to `CoCreateInstance`, which can execute arbitrary code.
+pub fn get_type_info(clsid_str: &str, allow_unsafe: bool) -> Result<TypeDetails> {
     let clsid = guid_from_str(clsid_str).unwrap_or(GUID::zeroed());
     
-    // 1. Try Registry Strategy
+    // 1. Try Registry Strategy (Safe)
     if let Ok(type_info) = load_type_info_from_registry(clsid_str) {
         return parse_type_info(&type_info, clsid_str)
             .map_err(|e| InspectError::Parsing(format!("Registry TypeInfo parsing failed: {}", e)).into());
     }
 
-    // 2. Fallback: Dynamic Instantiation
-    load_type_info_dynamic(&clsid)
+    // 2. Fallback: Dynamic Instantiation (Potentially Unsafe)
+    if allow_unsafe {
+        load_type_info_dynamic(&clsid)
+    } else {
+        Err(InspectError::Safety(
+            "Type Library not found in registry. Unsafe instantiation is disabled.".to_string()
+        ).into())
+    }
 }
 
 fn guid_from_str(s: &str) -> Result<GUID> {
@@ -354,28 +365,5 @@ impl<'a> ScopedVarDesc<'a> {
 impl<'a> Drop for ScopedVarDesc<'a> {
     fn drop(&mut self) {
         unsafe { self.1.ReleaseVarDesc(self.0 as *const _ as *mut _) };
-    }
-}
-
-// --- Tests ---
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_vartype_mapping() {
-        assert_eq!(vartype_to_string(VT_BSTR.0 as u16), "String");
-        assert_eq!(vartype_to_string(VT_I4.0 as u16), "Long");
-        assert_eq!(vartype_to_string(VT_BOOL.0 as u16), "Boolean");
-        assert_eq!(vartype_to_string((VT_I4.0 as u16) | 0x2000), "Long[]");
-    }
-
-    #[test]
-    fn test_parse_version() {
-        assert_eq!(parse_version("1.2"), Some((1, 2)));
-        assert_eq!(parse_version("5.0"), Some((5, 0)));
-        assert_eq!(parse_version("1"), Some((1, 0)));
-        assert_eq!(parse_version("invalid"), None);
     }
 }

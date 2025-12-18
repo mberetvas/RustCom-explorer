@@ -2,47 +2,38 @@
 
 ![RustCOM Explorer](rs-com-explorer.png)
 
-> **A generic, lightning-fast TUI for exploring Windows COM/ActiveX objects.**
+A high-performance, terminal-based explorer for Windows COM (Component Object Model) and ActiveX objects. Designed for system integrators, SCADA engineers, and developers who need to inspect legacy and modern Windows components without the overhead of heavy GUI tools.
 
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)](https://www.microsoft.com/windows)
 [![Rust](https://img.shields.io/badge/built_with-Rust-dca282.svg?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Build Status](https://github.com/mberetvas/RustCom-explorer/actions/workflows/release.yml/badge.svg)](https://github.com/mberetvas/RustCom-explorer/actions/workflows/release.yml)
 
-[![Build and Release](https://github.com/mberetvas/RustCom-explorer/actions/workflows/release.yml/badge.svg)](https://github.com/mberetvas/RustCom-explorer/actions/workflows/release.yml)
-[![Dependency review](https://github.com/mberetvas/RustCom-explorer/actions/workflows/dependency-review.yml/badge.svg)](https://github.com/mberetvas/RustCom-explorer/actions/workflows/dependency-review.yml)
-[![rust-clippy analyze](https://github.com/mberetvas/RustCom-explorer/actions/workflows/rust-clippy.yml/badge.svg)](https://github.com/mberetvas/RustCom-explorer/actions/workflows/rust-clippy.yml)
+## 🧐 Overview
 
-**RustCOM Explorer** is a terminal-based utility designed for system integrators, SCADA engineers, and developers who need to interact with Windows COM (Component Object Model) objects.
+RustCOM Explorer provides a modern TUI (Text User Interface) to browse, search, and inspect registered COM objects on your Windows system. Unlike traditional tools like OLEView, it prioritizes safety by inspecting Type Libraries in the Registry before attempting instantiation, runs entirely in the terminal, and supports fuzzy searching.
 
-Unlike heavy GUI tools like OLEView, this tool runs entirely in the terminal, offers real-time fuzzy search, and allows for safe inspection of method signatures and properties without accidental instantiation.
-
----
+For automation tasks, it includes a multi-threaded CLI mode capable of deep-inspecting thousands of objects in seconds using parallel processing.
 
 ## ✨ Features
 
-- **🚀 High Performance:** Instant startup and low memory footprint compared to traditional GUI inspectors.
-- **🔍 Fuzzy Search:** Filter through thousands of registered COM objects in real-time using fuzzy matching algorithms.
-- **🛡️ Safe Inspection:** Prioritizes reading Type Libraries (`LoadRegTypeLib`) to inspect objects without instantiation, preventing side effects.
-- **📋 Developer Friendly:** Copy method signatures (`void Method(int ID)`) directly to your clipboard for use in C++, C#, or Rust.
-- **🧵 Non-Blocking:** Inspection runs on background threads, ensuring the UI never freezes during heavy registry lookups.
-- **💻 CLI Mode:** Output object lists to stdout or files in Text or JSON formats for scripting.
+- **🚀 High Performance**: Built with Rust for instant startup and low memory footprint.
+- **⚡ Parallel Deep Inspection**: Utilizes a global thread pool to inspect thousands of objects concurrently during JSON export.
+- **🛡️ Safety First**: Inspection logic prefers `LoadRegTypeLib` to avoid side effects. Optional "Unsafe Mode" allows dynamic instantiation (`CoCreateInstance`) for stubborn objects.
+- **🔍 Fuzzy Search**: Real-time filtering of objects by Name, CLSID, or Description.
+- **📋 Developer Ready**: Copy method signatures (C++, C#, Rust style) directly to the clipboard.
+- **💻 Dual Mode**: Full interactive TUI for exploration and CLI for scripting/exporting.
 
 ## 🚀 Getting Started
 
 ### Prerequisites
 
-- **Windows 10/11** (Required for COM API availability)
-- **Rust Toolchain** (1.75 or later)
+- **Operating System**: Windows 10 or Windows 11 (Required for Win32 COM API).
+- **Toolchain**: [Rust](https://www.rust-lang.org/tools/install) 1.75 or later.
 
 ### Installation
 
-**Option 1: Download Pre-built Executable**
-
-Download the latest built executable for Windows from the [Releases](../../releases) section of this repository. Extract and run directly—no build required.
-
-**Option 2: Build from Source**
-
-Clone the repository and build with Cargo:
+Clone the repository and build the project using Cargo:
 
 ```bash
 git clone https://github.com/Volvo/comm_browser.git
@@ -50,105 +41,66 @@ cd comm_browser
 cargo build --release
 ```
 
-The compiled executable will be available in `target/release/comm_browser.exe`.
+The executable will be located at `./target/release/rustcom_explorer.exe`.
 
-> **Note:** Some COM objects require Administrator privileges to inspect. If you encounter permission errors, try running your terminal as Administrator.
+> [!NOTE]
+> Some system-level COM objects require Administrator privileges to be visible or inspected. For best results, run your terminal as Administrator.
 
-## 📖 Usage Guide
+## 📖 Usage
 
-RustCOM Explorer runs in two modes: **TUI (Interactive)** and **CLI (Scripting)**.
+### Interactive TUI Mode
 
-### CLI Usage
-
-You can use the list command to dump COM objects. The tool automatically adds the correct extension (.txt or .json) to your output filename.
-
-```bash
-# Generate a Text Report (creates 'report.txt')
-comm_browser.exe list --output report
-
-# Filter objects and save (creates 'excel_objects.txt')
-comm_browser.exe list --filter "Excel" --output excel_objects
-
-# Export as JSON (creates 'data.json')
-comm_browser.exe list --json --output data
-```
-
-### Interactive TUI
-
-Simply run the executable without arguments to enter TUI mode:
+Simply run the application without arguments to enter the interactive interface:
 
 ```bash
-comm_browser.exe
+./rustcom_explorer.exe
 ```
 
-The interface is divided into two panes: the **Object List** (left) and **Details/Inspection** (right).
-
-![Example1](example1.png)
-![Example2](example2.png)
-
-### Navigation & Browsing
-
-COM objects are organized by category based on their ProgID prefix (e.g., "Excel", "Word", "MSXML"). Use arrow keys to browse categories and individual objects.
-
-### Keyboard Shortcuts
+**Navigation Controls:**
 
 | Key | Action |
 | :--- | :--- |
-| **Navigation** | |
-| `↑` / `↓` | Scroll through categories, objects, or members list |
-| `Enter` | **Expand/Collapse** category OR **Inspect** selected object members |
-| `Esc` | Go back to browsing / Clear search query |
-| `Ctrl+C` | Quit the application |
-| **Search** | |
-| `a-z` | Type to filter objects (by Name, CLSID, or Description) |
-| `Backspace` | Delete character from filter |
-| **Inspection Mode** | |
-| `c` | Copy selected member signature to clipboard |
-| `Shift+C` | Copy **all** members of the object to clipboard |
+| `↑` / `↓` | Navigate list or menu items |
+| `Enter` | Expand Category / Inspect Object |
+| `Esc` | Back / Clear Search |
+| `Type` | Fuzzy search filter |
+| `c` | Copy selected member signature |
+| `Shift + C` | Copy all members to clipboard |
+| `Ctrl + C` | Quit |
 
-### View Structure
+### CLI / Automation Mode
 
-**Left Pane (Object List):**
-- **Categories** (▼ expanded / ▶ collapsed): Grouped by ProgID prefix
-- **Objects**: Indented under their category, showing Name and CLSID
+Use the `list` command to generate reports or export data for processing.
 
-**Right Pane (Details):**
-- **Browsing Mode**: Shows metadata about the selected category or object
-- **Inspection Mode**: Displays object metadata and a list of members (methods & properties)
+**Generate a Text Report:**
+```bash
+rustcom_explorer.exe list --output report.txt
+```
 
-### Member Types & Access Modes
+**Filter and Export to JSON:**
+This command runs a deep inspection on all matching objects. Progress is parallelized across all CPU cores.
+```bash
+rustcom_explorer.exe list --filter "Excel" --json --output excel_data.json
+```
 
-Members are displayed with type indicators and access badges:
+**Enable Unsafe Instantiation:**
+If an object doesn't have a registered Type Library, use `--unsafe` to allow the tool to instantiate it to retrieve type info.
+```bash
+rustcom_explorer.exe list --unsafe --json --output full_dump.json
+```
 
-- **M** : **Method** (Function call)
-- **P** : **Property** (Attribute)
-  - `[R]`: Read-only
-  - `[W]`: Write-only
-  - `[RW]`: Read/Write
+## 🏗️ Architecture
 
-## 🏗 Architecture
+The project is structured to ensure stability even when interacting with unstable legacy components.
 
-This project uses a modular architecture to separate UI logic from low-level Windows APIs.
+- **Registry Scanning**: Iterates `HKEY_CLASSES_ROOT` to build an initial index of `ProgID`s and `CLSID`s.
+- **COM Interop**: Uses the `windows` crate for low-level interaction.
+    - **Safe Path**: Attempts to load `ITypeLib` directly from the registry.
+    - **Unsafe Path**: Falls back to `CoCreateInstance` + `IDispatch` if explicitly allowed.
+- **Parallelism**: The CLI mode configures a custom `rayon` thread pool where every worker thread initializes COM (`CoInitializeEx`) independently, allowing for massive concurrency during deep inspection tasks.
 
-- **`scanner.rs`**: Handles the enumeration of `HKEY_CLASSES_ROOT` to find registered ProgIDs and CLSIDs.
-- **`com_interop.rs`**: The core unsafe Rust layer. It manages COM initialization (RAII), attempts to load TypeInfos from the registry, and parses cryptic `VARDESC`/`FUNCDESC` structures into human-readable strings.
-- **`app.rs`**: Manages the TUI state, event loop, and multithreaded inspection channel. Includes rendering logic with native [Ratatui](https://github.com/ratatui/ratatui) styling.
-- **`cli.rs`**: Defines command-line arguments using `clap`.
-- **`error_handling.rs`**: Custom error handling and type conversions.
-- **`UI Rendering`**: Built with [Ratatui](https://github.com/ratatui/ratatui) using native color themes and styling (no custom theme module).
+## ⚠️ Limitations
 
-### Safety Strategy
-
-1. **Registry First:** The tool attempts to load `ITypeLib` directly from the registry using the object's GUID.
-2. **Dynamic Fallback:** Only if the registry lookup fails does it attempt `CoCreateInstance` to query `IDispatch` dynamically.
-3. **Error Handling:** All COM HRESULT failures are captured and displayed as TUI notifications or error panels, ensuring the app never crashes on a bad object.
-
-## 🤝 Known Limitations
-
-- **Windows Only:** This tool relies strictly on the Windows API (Win32) to interact with the Registry and COM Runtime. It **will not work** on Linux, macOS, or WSL (unless running the Windows `.exe` via interop).
-- **Administrator Privileges:** Some COM objects (especially those in `HKEY_LOCAL_MACHINE`) require elevated permissions to inspect. If the list seems incomplete, try running as Administrator.
-- **Type Libraries:** The safe inspection features rely on objects having registered Type Libraries. Objects without them must be instantiated to be inspected, which this tool performs as a fallback.
-
-## 📄 License
-
-This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
+- **Platform**: Strictly Windows-only due to dependency on the Win32 API.
+- **Permissions**: Inspection of certain administrative objects will fail without elevated privileges.
+- **Registry Pollution**: The tool relies on the Registry being relatively clean. "Ghost" keys from uninstalled software may appear in the list but fail inspection.

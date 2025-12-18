@@ -44,6 +44,9 @@ pub struct App {
     pub app_mode: AppMode,
     pub should_quit: bool,
     
+    // Safety Configuration
+    pub unsafe_mode: bool,
+
     // Categorization State
     pub expanded_categories: HashSet<String>,
 
@@ -59,7 +62,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(mut objects: Vec<ComObject>) -> Self {
+    pub fn new(mut objects: Vec<ComObject>, unsafe_mode: bool) -> Self {
         // Sort objects by name to ensure consistent initial order
         objects.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -74,6 +77,7 @@ impl App {
             list_state,
             app_mode: AppMode::Browsing,
             should_quit: false,
+            unsafe_mode,
             expanded_categories: HashSet::new(),
             selected_object: None,
             error_message: None,
@@ -164,7 +168,6 @@ impl App {
             self.tick_notifications();
 
             // Calculate view items once per frame
-            // Now returns Vec<TreeItem> which owns its data (indices), so no borrow of `self` persists
             let view_items = self.get_view_items();
 
             terminal.draw(|f| ui_render(f, self, &view_items))?;
@@ -304,6 +307,7 @@ impl App {
         self.inspection_receiver = Some(rx);
 
         let clsid_clone = clsid.clone();
+        let allow_unsafe = self.unsafe_mode;
         
         thread::spawn(move || {
             let _com_guard = match com_interop::initialize_com() {
@@ -314,7 +318,7 @@ impl App {
                 }
             };
 
-            let result = com_interop::get_type_info(&clsid_clone)
+            let result = com_interop::get_type_info(&clsid_clone, allow_unsafe)
                 .context(format!("Failed to inspect object {}. \nThis may be due to permissions or missing registration.", clsid_clone));
             
             let _ = tx.send(result);
@@ -457,6 +461,9 @@ fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
                 let p = Paragraph::new(vec![
                     Line::from(Span::styled("Error Inspecting Object:", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))),
                     Line::from(Span::styled(err_msg, Style::default().fg(Color::Red))),
+                    Line::from(""),
+                    Line::from(Span::styled("Note:", Style::default().add_modifier(Modifier::BOLD))),
+                    Line::from("If this is a safety error, try restarting with '--unsafe'"),
                 ])
                 .block(Block::default().borders(Borders::ALL).title("Error"))
                 .wrap(ratatui::widgets::Wrap { trim: true });
@@ -593,10 +600,11 @@ fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
     };
 
     let status_text = format!(
-        "Mode: {} | Obj: {} {} | <Enter>: Expand/Insp | <Esc>: Back | <c/C>: Copy", 
+        "Mode: {} | Obj: {} {} | Unsafe: {} | <Enter>: Expand/Insp | <Esc>: Back", 
         mode_str,
         current_selection_name,
-        search_status
+        search_status,
+        app.unsafe_mode
     );
     let status = Paragraph::new(status_text)
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));

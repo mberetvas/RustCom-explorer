@@ -20,11 +20,11 @@ Unlike heavy GUI tools like OLEView, this tool runs entirely in the terminal, of
 
 ## ✨ Features
 
-- **🚀 High Performance:** Instant startup and low memory footprint compared to traditional GUI inspectors.
+- **🚀 High Performance:** Instant startup and low memory footprint.
+- **⚡ Parallel Processing:** Utilizes a global thread pool (Rayon) to perform deep inspection of thousands of COM objects concurrently during CLI exports.
 - **🔍 Fuzzy Search:** Filter through thousands of registered COM objects in real-time using fuzzy matching algorithms.
 - **🛡️ Safe Inspection:** Prioritizes reading Type Libraries (`LoadRegTypeLib`) to inspect objects without instantiation, preventing side effects.
 - **📋 Developer Friendly:** Copy method signatures (`void Method(int ID)`) directly to your clipboard for use in C++, C#, or Rust.
-- **🧵 Non-Blocking:** Inspection runs on background threads, ensuring the UI never freezes during heavy registry lookups.
 - **💻 CLI Mode:** Output object lists to stdout or files in Text or JSON formats for scripting.
 
 ## 🚀 Getting Started
@@ -60,7 +60,9 @@ RustCOM Explorer runs in two modes: **TUI (Interactive)** and **CLI (Scripting)*
 
 ### CLI Usage
 
-You can use the list command to dump COM objects. The tool automatically adds the correct extension (.txt or .json) to your output filename.
+You can use the `list` command to dump COM objects. The tool automatically adds the correct extension (`.txt` or `.json`) to your output filename.
+
+When exporting to JSON, the tool performs a "Deep Inspection" of every object to retrieve method signatures. This process is parallelized across all available CPU cores.
 
 ```bash
 # Generate a Text Report (creates 'report.txt')
@@ -69,7 +71,8 @@ comm_browser.exe list --output report
 # Filter objects and save (creates 'excel_objects.txt')
 comm_browser.exe list --filter "Excel" --output excel_objects
 
-# Export as JSON (creates 'data.json')
+# Export as JSON with full Type details (creates 'data.json')
+# Displays progress: "Processing 1200 objects on 16 threads..."
 comm_browser.exe list --json --output data
 ```
 
@@ -84,7 +87,6 @@ comm_browser.exe
 The interface is divided into two panes: the **Object List** (left) and **Details/Inspection** (right).
 
 ![Example1](example1.png)
-![Example2](example2.png)
 
 ### Navigation & Browsing
 
@@ -106,47 +108,25 @@ COM objects are organized by category based on their ProgID prefix (e.g., "Excel
 | `c` | Copy selected member signature to clipboard |
 | `Shift+C` | Copy **all** members of the object to clipboard |
 
-### View Structure
-
-**Left Pane (Object List):**
-- **Categories** (▼ expanded / ▶ collapsed): Grouped by ProgID prefix
-- **Objects**: Indented under their category, showing Name and CLSID
-
-**Right Pane (Details):**
-- **Browsing Mode**: Shows metadata about the selected category or object
-- **Inspection Mode**: Displays object metadata and a list of members (methods & properties)
-
-### Member Types & Access Modes
-
-Members are displayed with type indicators and access badges:
-
-- **M** : **Method** (Function call)
-- **P** : **Property** (Attribute)
-  - `[R]`: Read-only
-  - `[W]`: Write-only
-  - `[RW]`: Read/Write
-
 ## 🏗 Architecture
 
-This project uses a modular architecture to separate UI logic from low-level Windows APIs.
+This project uses a modular architecture to separate UI logic from low-level Windows APIs and concurrent processing.
 
 - **`scanner.rs`**: Handles the enumeration of `HKEY_CLASSES_ROOT` to find registered ProgIDs and CLSIDs.
 - **`com_interop.rs`**: The core unsafe Rust layer. It manages COM initialization (RAII), attempts to load TypeInfos from the registry, and parses cryptic `VARDESC`/`FUNCDESC` structures into human-readable strings.
-- **`app.rs`**: Manages the TUI state, event loop, and multithreaded inspection channel. Includes rendering logic with native [Ratatui](https://github.com/ratatui/ratatui) styling.
-- **`cli.rs`**: Defines command-line arguments using `clap`.
-- **`error_handling.rs`**: Custom error handling and type conversions.
-- **`UI Rendering`**: Built with [Ratatui](https://github.com/ratatui/ratatui) using native color themes and styling (no custom theme module).
+- **`main.rs`**: Configures the global `rayon` thread pool with `CoInitializeEx`/`CoUninitialize` handlers, ensuring safe COM interaction across parallel worker threads.
+- **`app.rs`**: Manages the TUI state, event loop, and background inspection channel.
+- **`processor.rs`**: Handles fuzzy matching and data organization.
 
-### Safety Strategy
+### Parallelism Strategy
 
-1. **Registry First:** The tool attempts to load `ITypeLib` directly from the registry using the object's GUID.
-2. **Dynamic Fallback:** Only if the registry lookup fails does it attempt `CoCreateInstance` to query `IDispatch` dynamically.
-3. **Error Handling:** All COM HRESULT failures are captured and displayed as TUI notifications or error panels, ensuring the app never crashes on a bad object.
+1.  **TUI Mode:** Uses a dedicated background thread (`std::thread`) for on-demand inspection to keep the UI responsive.
+2.  **CLI Mode:** Uses `rayon::par_iter` to inspect thousands of objects simultaneously. The thread pool is explicitly configured to initialize the COM library on every worker thread start.
 
 ## 🤝 Known Limitations
 
-- **Windows Only:** This tool relies strictly on the Windows API (Win32) to interact with the Registry and COM Runtime. It **will not work** on Linux, macOS, or WSL (unless running the Windows `.exe` via interop).
-- **Administrator Privileges:** Some COM objects (especially those in `HKEY_LOCAL_MACHINE`) require elevated permissions to inspect. If the list seems incomplete, try running as Administrator.
+- **Windows Only:** This tool relies strictly on the Windows API (Win32) to interact with the Registry and COM Runtime.
+- **Administrator Privileges:** Some COM objects (especially those in `HKEY_LOCAL_MACHINE`) require elevated permissions to inspect.
 - **Type Libraries:** The safe inspection features rely on objects having registered Type Libraries. Objects without them must be instantiated to be inspected, which this tool performs as a fallback.
 
 ## 📄 License

@@ -74,19 +74,25 @@ Use the `list` command to generate reports or export data for processing.
 
 **Generate a Text Report:**
 ```bash
-rustcom_explorer.exe list --output report.txt
+rustcom_explorer.exe list --output report
 ```
 
 **Filter and Export to JSON:**
 This command runs a deep inspection on all matching objects. Progress is parallelized across all CPU cores.
 ```bash
-rustcom_explorer.exe list --filter "Excel" --json --output excel_data.json
+rustcom_explorer.exe list --filter "Excel" --json --output excel_data
 ```
 
 **Enable Unsafe Instantiation:**
 If an object doesn't have a registered Type Library, use `--unsafe` to allow the tool to instantiate it to retrieve type info.
 ```bash
-rustcom_explorer.exe list --unsafe --json --output full_dump.json
+rustcom_explorer.exe list --unsafe --json --output full_dump
+```
+
+**Verbose Output:**
+Use `--verbose` to print additional information during CLI operations.
+```bash
+rustcom_explorer.exe list --verbose --output report
 ```
 
 ## 🏗️ Architecture

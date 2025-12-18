@@ -93,12 +93,20 @@ fn main() -> Result<()> {
                 // Smart Extension Handling:
                 // If the filename doesn't end with the correct extension, append it.
                 // We use append instead of set_extension to avoid replacing parts of filenames like "my.report" -> "my.txt"
-                let path_str = path.to_string_lossy();
-                if !path_str.to_lowercase().ends_with(&format!(".{}", ext)) {
-                    let mut new_name = path.file_name().unwrap_or_default().to_os_string();
-                    new_name.push(format!(".{}", ext));
-                    path.set_file_name(new_name);
-                }
+                let should_append = path.file_name()
+                    .map(|name| {
+                        !name.to_string_lossy()
+                            .to_lowercase()
+                            .ends_with(&format!(".{}", ext))
+                    })
+                    .unwrap_or(false);
+
+                if should_append
+                    && let Some(stem) = path.file_name() {
+                        let mut new_name = stem.to_os_string();
+                        new_name.push(format!(".{}", ext));
+                        path.set_file_name(new_name);
+                    }
 
                 if let Err(e) = std::fs::write(&path, output_content) {
                     eprintln!("Error: Failed to write output to file '{}': {:#}", path.display(), e);

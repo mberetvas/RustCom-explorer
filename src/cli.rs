@@ -20,11 +20,11 @@ pub struct ListArgs {
     #[arg(short, long)]
     pub filter: Option<String>,
 
-    /// Output in JSON format
+    /// Output in JSON format instead of the default Text format
     #[arg(long)]
     pub json: bool,
 
-    /// Output to a specific file path
+    /// Output to a specific file (extension will be added automatically)
     #[arg(short, long)]
     pub output: Option<String>,
 }

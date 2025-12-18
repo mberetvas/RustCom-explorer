@@ -60,20 +60,17 @@ RustCOM Explorer runs in two modes: **TUI (Interactive)** and **CLI (Scripting)*
 
 ### CLI Usage
 
-You can use the `list` command to dump COM objects to the console or a file.
+You can use the list command to dump COM objects. The tool automatically adds the correct extension (.txt or .json) to your output filename.
 
 ```bash
-# List all objects (text format)
-comm_browser.exe list
+# Generate a Text Report (creates 'report.txt')
+comm_browser.exe list --output report
 
-# Filter objects containing "Excel"
-comm_browser.exe list --filter "Excel"
+# Filter objects and save (creates 'excel_objects.txt')
+comm_browser.exe list --filter "Excel" --output excel_objects
 
-# Output filtered results to a JSON file
-comm_browser.exe list --filter "XML" --json --output results.json
-
-# View help
-comm_browser.exe --help
+# Export as JSON (creates 'data.json')
+comm_browser.exe list --json --output data
 ```
 
 ### Interactive TUI

@@ -4,7 +4,8 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use comm_browser::{app::App, com_interop, scanner, error_handling::Result};
+use clap::Parser;
+use comm_browser::{app::App, com_interop, scanner, error_handling::Result, cli::{Args, Commands}};
 
 /// RAII wrapper for TUI terminal setup and teardown.
 pub struct Tui {
@@ -42,33 +43,60 @@ impl Drop for Tui {
 }
 
 fn main() -> Result<()> {
-    // 1. Initialize COM Library
+    // 1. Parse CLI Arguments
+    let args = Args::parse();
+
+    // 2. Initialize COM Library (Required for both CLI and TUI)
+    // We do this early to ensure COM is ready.
     let _com_guard = com_interop::initialize_com()?;
     
-    println!("Scanning for COM objects... (This may take a moment)");
-    
-    // 2. Scan for objects (blocking for now, before TUI starts)
-    let objects = match scanner::scan_com_objects() {
-        Ok(objs) => objs,
-        Err(e) => {
-            eprintln!("Failed to scan COM objects: {:?}", e);
-            return Err(e);
+    // 3. Branch based on Command
+    match args.command {
+        Some(Commands::List(list_args)) => {
+            // --- CLI Mode: List ---
+            // Placeholder logic for Phase 2
+            println!("List command executed.");
+            if let Some(filter) = list_args.filter {
+                println!("Filter applied: {}", filter);
+            }
+            if list_args.json {
+                println!("Output format: JSON");
+            }
+            if let Some(path) = list_args.output {
+                println!("Output file: {}", path);
+            }
+            
+            // In the future, we will call scanner::scan_com_objects() here
+            // and filter/serialize the results.
         }
-    };
+        None => {
+            // --- TUI Mode (Default) ---
+            println!("Scanning for COM objects... (This may take a moment)");
+            
+            // Scan for objects (blocking for now, before TUI starts)
+            let objects = match scanner::scan_com_objects() {
+                Ok(objs) => objs,
+                Err(e) => {
+                    eprintln!("Failed to scan COM objects: {:?}", e);
+                    return Err(e);
+                }
+            };
 
-    if objects.is_empty() {
-        println!("No COM objects found. Press Enter to exit.");
-        let mut line = String::new();
-        let _ = std::io::stdin().read_line(&mut line);
-        return Ok(());
+            if objects.is_empty() {
+                println!("No COM objects found. Press Enter to exit.");
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                return Ok(());
+            }
+
+            // Initialize TUI
+            let mut tui = Tui::new()?;
+
+            // Run App
+            let mut app = App::new(objects);
+            app.run(&mut tui.terminal)?;
+        }
     }
-
-    // 3. Initialize TUI
-    let mut tui = Tui::new()?;
-
-    // 4. Run App
-    let mut app = App::new(objects);
-    app.run(&mut tui.terminal)?;
 
     Ok(())
 }

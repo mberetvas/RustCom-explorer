@@ -1,4 +1,6 @@
+// src/main.rs
 use std::io;
+use std::fmt::Write as FmtWrite; // Import for writing to String buffer
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -54,20 +56,54 @@ fn main() -> Result<()> {
     match args.command {
         Some(Commands::List(list_args)) => {
             // --- CLI Mode: List ---
-            // Placeholder logic for Phase 2
-            println!("List command executed.");
-            if let Some(filter) = list_args.filter {
-                println!("Filter applied: {}", filter);
-            }
-            if list_args.json {
-                println!("Output format: JSON");
-            }
-            if let Some(path) = list_args.output {
-                println!("Output file: {}", path);
-            }
             
-            // In the future, we will call scanner::scan_com_objects() here
-            // and filter/serialize the results.
+            // A. Scan for Objects
+            let objects = match scanner::scan_com_objects() {
+                Ok(objs) => objs,
+                Err(e) => {
+                    eprintln!("Error: Failed to scan COM objects: {:#}", e);
+                    std::process::exit(1);
+                }
+            };
+            
+            // B. Filter and Process
+            // If filter is None, we pass an empty string to match all
+            let filter_query = list_args.filter.as_deref().unwrap_or("");
+            let grouped_objects = comm_browser::processor::process_objects(objects, filter_query);
+
+            // C. Format Output
+            let output_content = if list_args.json {
+                // JSON Formatting
+                serde_json::to_string_pretty(&grouped_objects)
+                    .expect("Failed to serialize COM objects to JSON")
+            } else {
+                // Text Formatting
+                let mut buffer = String::new();
+                for (category, objects) in grouped_objects {
+                    // We handle fmt error by unwrap since writing to String shouldn't fail
+                    writeln!(&mut buffer, "[{}]", category).unwrap();
+                    for obj in objects {
+                        writeln!(
+                            &mut buffer, 
+                            "  {} ({}) - {}", 
+                            obj.name, obj.clsid, obj.description
+                        ).unwrap();
+                    }
+                }
+                buffer
+            };
+
+            // D. Output Handling (File vs Stdout)
+            if let Some(path) = list_args.output {
+                if let Err(e) = std::fs::write(&path, output_content) {
+                    eprintln!("Error: Failed to write output to file '{}': {:#}", path, e);
+                    std::process::exit(1);
+                } else {
+                    println!("Successfully wrote output to '{}'", path);
+                }
+            } else {
+                println!("{}", output_content);
+            }
         }
         None => {
             // --- TUI Mode (Default) ---

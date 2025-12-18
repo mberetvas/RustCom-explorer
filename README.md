@@ -25,6 +25,7 @@ Unlike heavy GUI tools like OLEView, this tool runs entirely in the terminal, of
 - **🛡️ Safe Inspection:** Prioritizes reading Type Libraries (`LoadRegTypeLib`) to inspect objects without instantiation, preventing side effects.
 - **📋 Developer Friendly:** Copy method signatures (`void Method(int ID)`) directly to your clipboard for use in C++, C#, or Rust.
 - **🧵 Non-Blocking:** Inspection runs on background threads, ensuring the UI never freezes during heavy registry lookups.
+- **💻 CLI Mode:** Output object lists to stdout or files in Text or JSON formats for scripting.
 
 ## 🚀 Getting Started
 
@@ -55,7 +56,35 @@ The compiled executable will be available in `target/release/comm_browser.exe`.
 
 ## 📖 Usage Guide
 
-The application interface is divided into two panes: the **Object List** (left) and **Details/Inspection** (right).
+RustCOM Explorer runs in two modes: **TUI (Interactive)** and **CLI (Scripting)**.
+
+### CLI Usage
+
+You can use the `list` command to dump COM objects to the console or a file.
+
+```bash
+# List all objects (text format)
+comm_browser.exe list
+
+# Filter objects containing "Excel"
+comm_browser.exe list --filter "Excel"
+
+# Output filtered results to a JSON file
+comm_browser.exe list --filter "XML" --json --output results.json
+
+# View help
+comm_browser.exe --help
+```
+
+### Interactive TUI
+
+Simply run the executable without arguments to enter TUI mode:
+
+```bash
+comm_browser.exe
+```
+
+The interface is divided into two panes: the **Object List** (left) and **Details/Inspection** (right).
 
 ![Example1](example1.png)
 ![Example2](example2.png)
@@ -107,6 +136,7 @@ This project uses a modular architecture to separate UI logic from low-level Win
 - **`scanner.rs`**: Handles the enumeration of `HKEY_CLASSES_ROOT` to find registered ProgIDs and CLSIDs.
 - **`com_interop.rs`**: The core unsafe Rust layer. It manages COM initialization (RAII), attempts to load TypeInfos from the registry, and parses cryptic `VARDESC`/`FUNCDESC` structures into human-readable strings.
 - **`app.rs`**: Manages the TUI state, event loop, and multithreaded inspection channel. Includes rendering logic with native [Ratatui](https://github.com/ratatui/ratatui) styling.
+- **`cli.rs`**: Defines command-line arguments using `clap`.
 - **`error_handling.rs`**: Custom error handling and type conversions.
 - **`UI Rendering`**: Built with [Ratatui](https://github.com/ratatui/ratatui) using native color themes and styling (no custom theme module).
 
@@ -125,7 +155,3 @@ This project uses a modular architecture to separate UI logic from low-level Win
 ## 📄 License
 
 This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
-
-
-
-

@@ -1,0 +1,63 @@
+version = 1
+revision = 3
+requires-python = ">=3.14"
+
+[[package]]
+name = "comm-browser"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "openopc-da" },
+    { name = "pywin32" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "openopc-da", specifier = ">=1.5.1" },
+    { name = "pywin32", specifier = ">=311" },
+]
+
+[[package]]
+name = "openopc-da"
+version = "1.5.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyro5" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a9/f6/312280471a24dcba98f1077dd03e16312552a6f3b32654b2891594f04aea/OpenOPC-DA-1.5.1.tar.gz", hash = "sha256:5433f0cf50988713825b3ae6803228537601e0ace5eb172b8dc00902426c5883", size = 35343, upload-time = "2025-04-28T14:57:16.735Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/62/56/49aaf6b8ae8a00538cba7a4aa2c7a9ab0847bef9491c98ca0ca9bd217c4b/OpenOPC_DA-1.5.1-py3-none-manylinux1_x86_64.whl", hash = "sha256:2e177c72a91a2bfadca175bb650b33a1645e9aa1b868bfe0db76da792e0abbe3", size = 34170, upload-time = "2025-04-28T14:57:13.069Z" },
+    { url = "https://files.pythonhosted.org/packages/47/dd/f78bc7b151ee830057444bd6bd1f0906a8c89badf083753ab631b2a7ccf3/OpenOPC_DA-1.5.1-py3-none-win32.whl", hash = "sha256:49f2ae771986f2a4690599b38aa6c9b82bdb846dd3aa1dff36b1dd6dbdf1eed2", size = 36625, upload-time = "2025-04-28T14:57:14.674Z" },
+    { url = "https://files.pythonhosted.org/packages/f4/db/1ae86b0d9f0deda11e750a80c04288897ce08aaa0fbdb37e1859fd46abdb/OpenOPC_DA-1.5.1-py3-none-win_amd64.whl", hash = "sha256:ece6a47f648062ed0d99c76d7cd5c293e97dbe0f009c89cbb057349e3f3b1259", size = 34162, upload-time = "2025-04-28T14:57:15.741Z" },
+]
+
+[[package]]
+name = "pyro5"
+version = "5.15"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "serpent" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/46/53/d0fb4625ecf2fdbe83211a4b7e384b8deec95989330451b53b25ddc6f79a/Pyro5-5.15.tar.gz", hash = "sha256:82c3dfc9860b49f897b28ff24fe6716c841672c600af8fe40d0e3a7fac9a3f5e", size = 447559, upload-time = "2023-10-18T20:42:58.476Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/85/32/1c7e488f82c59189e917bfedb926b1c2b87104c8d31c8323a5aa5e1fc603/Pyro5-5.15-py3-none-any.whl", hash = "sha256:4d85428ed75985e63f159d2486ad5680743ea76f766340fd30b65dd20f83d471", size = 79110, upload-time = "2023-10-18T20:42:56.119Z" },
+]
+
+[[package]]
+name = "pywin32"
+version = "311"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c9/31/097f2e132c4f16d99a22bfb777e0fd88bd8e1c634304e102f313af69ace5/pywin32-311-cp314-cp314-win32.whl", hash = "sha256:b7a2c10b93f8986666d0c803ee19b5990885872a7de910fc460f9b0c2fbf92ee", size = 8840714, upload-time = "2025-07-14T20:13:32.449Z" },
+    { url = "https://files.pythonhosted.org/packages/90/4b/07c77d8ba0e01349358082713400435347df8426208171ce297da32c313d/pywin32-311-cp314-cp314-win_amd64.whl", hash = "sha256:3aca44c046bd2ed8c90de9cb8427f581c479e594e99b5c0bb19b29c10fd6cb87", size = 9656800, upload-time = "2025-07-14T20:13:34.312Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/d2/21af5c535501a7233e734b8af901574572da66fcc254cb35d0609c9080dd/pywin32-311-cp314-cp314-win_arm64.whl", hash = "sha256:a508e2d9025764a8270f93111a970e1d0fbfc33f4153b388bb649b7eec4f9b42", size = 8932540, upload-time = "2025-07-14T20:13:36.379Z" },
+]
+
+[[package]]
+name = "serpent"
+version = "1.42"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/06/3c/7ecf39b48121cb6490634bfcb1b1c5cac7d7a216805d889b0676a2e8493f/serpent-1.42.tar.gz", hash = "sha256:8ea082b01f8ba07ecd74e34a9118ac4521bc4594938d912b808c89f1da425506", size = 90352, upload-time = "2025-10-26T21:58:13.871Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/24/73031e6bd25d8f94811b3752b0b217efbdb20a67b65c6838c9af4e50c2e2/serpent-1.42-py3-none-any.whl", hash = "sha256:a02f5a4fcf3b41ee6204b36c3cf026bf0433ffe15b6a7fc8a37e0bff74d87575", size = 9663, upload-time = "2025-10-26T21:58:12.565Z" },
+]

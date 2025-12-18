@@ -9,6 +9,7 @@ arboard = "3.6.1"
 clap = { version = "4.5.53", features = ["derive"] }
 crossterm = "0.29.0"
 fuzzy-matcher = "0.3.7"
+pyo3 = { version = "0.27.2", features = ["auto-initialize"] }
 ratatui = "0.29.0"
 rayon = "1.11.0"
 serde = {version = "1.0.228", features = ["derive"]}

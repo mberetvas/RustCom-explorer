@@ -12,12 +12,11 @@ use std::time::{Duration, Instant};
 use crate::scanner::ComObject;
 use crate::error_handling::{Result, Context};
 use crate::com_interop::{self, TypeDetails, Member, AccessMode};
-use fuzzy_matcher::FuzzyMatcher;
-use fuzzy_matcher::skim::SkimMatcherV2;
+
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use arboard::Clipboard;
-use std::collections::{VecDeque, HashSet, BTreeMap};
+use std::collections::{VecDeque, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
@@ -35,7 +34,7 @@ pub struct Notification {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TreeItem {
     Category { name: String, count: usize, expanded: bool },
-    Object(usize), // Stores index into app.objects_list instead of reference
+    Object(ComObject), // Stores the ComObject directly
 }
 
 pub struct App {
@@ -107,45 +106,13 @@ impl App {
     }
 
     /// Compiles the view items: Filters -> Groups -> Flattens based on expansion.
-    /// Returns indices (usize) instead of references to avoid borrowing `self`.
+    /// Returns Vec<TreeItem> with ComObjects stored directly.
     pub fn get_view_items(&self) -> Vec<TreeItem> {
-        let matcher = SkimMatcherV2::default();
-        
-        // 1. Filter and Score
-        // We store (score, index, object_ref) temporary for sorting/grouping
-        let mut scored: Vec<(i64, usize, &ComObject)> = self.objects_list.iter()
-            .enumerate()
-            .filter_map(|(idx, obj)| {
-                if self.search_query.is_empty() {
-                    return Some((0, idx, obj));
-                }
+        let processed = crate::processor::process_objects(self.objects_list.clone(), &self.search_query);
 
-                let s_name = matcher.fuzzy_match(&obj.name, &self.search_query).map(|s| s + 10);
-                let s_clsid = matcher.fuzzy_match(&obj.clsid, &self.search_query).map(|s| s + 5);
-                let s_desc = matcher.fuzzy_match(&obj.description, &self.search_query);
-
-                let max_score = [s_name, s_clsid, s_desc].iter().filter_map(|&s| s).max();
-                max_score.map(|score| (score, idx, obj))
-            })
-            .collect();
-
-        // Sort by score descending if searching
-        if !self.search_query.is_empty() {
-            scored.sort_by(|a, b| b.0.cmp(&a.0));
-        }
-
-        // 2. Group by Prefix
-        // BTreeMap<CategoryName, Vec<(OriginalIndex, ObjectRef)>>
-        let mut groups: BTreeMap<String, Vec<(usize, &ComObject)>> = BTreeMap::new();
-        for (_, idx, obj) in scored {
-            let prefix = obj.name.split('.').next().unwrap_or("Misc").to_string();
-            groups.entry(prefix).or_default().push((idx, obj));
-        }
-
-        // 3. Flatten into TreeItems
         let mut items = Vec::new();
         // BTreeMap iterates keys alphabetically
-        for (category, mut objs) in groups {
+        for (category, objs) in processed {
             let is_searching = !self.search_query.is_empty();
             let is_expanded = self.expanded_categories.contains(&category) || is_searching;
             
@@ -156,13 +123,8 @@ impl App {
             });
 
             if is_expanded {
-                if !is_searching {
-                    // Sort alphabetically within category if not searching
-                    objs.sort_by(|a, b| a.1.name.cmp(&b.1.name));
-                }
-                
-                for (idx, _) in objs {
-                    items.push(TreeItem::Object(idx));
+                for obj in objs {
+                    items.push(TreeItem::Object(obj));
                 }
             }
         }
@@ -305,10 +267,8 @@ impl App {
                             self.expanded_categories.insert(name.clone());
                         }
                     },
-                    TreeItem::Object(obj_idx) => {
-                        if let Some(obj) = self.objects_list.get(*obj_idx) {
-                             self.inspect_object(obj.clsid.clone());
-                        }
+                    TreeItem::Object(obj) => {
+                        self.inspect_object(obj.clsid.clone());
                     }
                 }
             }
@@ -465,16 +425,12 @@ fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
                     Span::styled(format!("({})", count), Style::default().fg(Color::DarkGray)),
                 ]))
             },
-            TreeItem::Object(idx) => {
-                if let Some(obj) = app.objects_list.get(*idx) {
-                    ListItem::new(Line::from(vec![
-                        Span::raw("  "), // Indentation
-                        Span::raw(&obj.name),
-                        Span::styled(format!(" ({})", obj.clsid), Style::default().fg(Color::DarkGray)),
-                    ]))
-                } else {
-                    ListItem::new("Invalid Object")
-                }
+            TreeItem::Object(obj) => {
+                ListItem::new(Line::from(vec![
+                    Span::raw("  "), // Indentation
+                    Span::raw(&obj.name),
+                    Span::styled(format!(" ({})", obj.clsid), Style::default().fg(Color::DarkGray)),
+                ]))
             }
         }
     }).collect();
@@ -583,23 +539,19 @@ fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
                             Line::from(""),
                             Line::from(Span::styled("Hint: Press <Enter> to expand/collapse.", Style::default().fg(Color::Gray))),
                         ],
-                        TreeItem::Object(idx) => {
-                             if let Some(obj) = app.objects_list.get(*idx) {
-                                vec![
-                                    Line::from(Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD))),
-                                    Line::from(obj.name.as_str()),
-                                    Line::from(""),
-                                    Line::from(Span::styled("CLSID: ", Style::default().add_modifier(Modifier::BOLD))),
-                                    Line::from(obj.clsid.as_str()),
-                                    Line::from(""),
-                                    Line::from(Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD))),
-                                    Line::from(obj.description.as_str()),
-                                    Line::from(""),
-                                    Line::from(Span::styled("Hint: Press <Enter> to inspect details.", Style::default().fg(Color::Gray))),
-                                ]
-                             } else {
-                                 vec![Line::from("Unknown Object")]
-                             }
+                        TreeItem::Object(obj) => {
+                            vec![
+                                Line::from(Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD))),
+                                Line::from(obj.name.as_str()),
+                                Line::from(""),
+                                Line::from(Span::styled("CLSID: ", Style::default().add_modifier(Modifier::BOLD))),
+                                Line::from(obj.clsid.as_str()),
+                                Line::from(""),
+                                Line::from(Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD))),
+                                Line::from(obj.description.as_str()),
+                                Line::from(""),
+                                Line::from(Span::styled("Hint: Press <Enter> to inspect details.", Style::default().fg(Color::Gray))),
+                            ]
                         }
                     }
                 } else {
@@ -621,9 +573,7 @@ fn ui_render(f: &mut Frame, app: &mut App, view_items: &[TreeItem]) {
     let current_selection_name = if let Some(idx) = app.list_state.selected() {
          match view_items.get(idx) {
              Some(TreeItem::Category { name, .. }) => format!("Category: {}", name),
-             Some(TreeItem::Object(idx)) => {
-                 app.objects_list.get(*idx).map(|o| o.name.clone()).unwrap_or("Unknown".to_string())
-             },
+             Some(TreeItem::Object(obj)) => obj.name.clone(),
              None => "Unknown".to_string(),
          }
     } else {

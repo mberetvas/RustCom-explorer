@@ -10,7 +10,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use clap::Parser;
-use comm_browser::{app::App, com_interop, scanner, error_handling::Result, cli::{Args, Commands}};
+use rustcom_explorer::{app::App, com_interop, scanner, error_handling::Result, cli::{Args, Commands}};
 
 /// RAII wrapper for TUI terminal setup and teardown.
 pub struct Tui {
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
             
             // B. Filter
             let filter_query = list_args.filter.as_deref().unwrap_or("");
-            let grouped_objects = comm_browser::processor::process_objects(objects, filter_query);
+            let grouped_objects = rustcom_explorer::processor::process_objects(objects, filter_query);
 
             // C. Format
             let (output_content, ext) = if list_args.json {

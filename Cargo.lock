@@ -831,7 +831,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustcom-explorer"
+name = "rustcom_explorer"
 version = "0.2.0"
 dependencies = [
  "anyhow",
